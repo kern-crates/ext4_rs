@@ -160,16 +160,20 @@ fn main() {
     let inode_perm = (InodePerm::S_IREAD | InodePerm::S_IWRITE).bits();
     let inode_ref = ext4.create(ROOT_INODE, "4G.txt", inode_mode | inode_perm).unwrap();
     log::info!("----write file----");
-    const WRITE_SIZE: usize = (0x100000 * (4096));
+    const WRITE_SIZE: usize = (1024 * 1024 * 1024 * 4);
     let write_buf = vec![0x41 as u8; WRITE_SIZE];
     let r = ext4.write_at(inode_ref.inode_num, 0, &write_buf);
 
-    // check
-    let path = "4G.txt";
-    let mut read_buf = vec![0u8;  WRITE_SIZE as usize];
-    let child_inode = ext4.generic_open(path, &mut 2, false, 0, &mut 0).unwrap();
-    let mut data = vec![0u8; WRITE_SIZE as usize];
-    let read_data = ext4.read_at(child_inode, 0 as usize, &mut data);
-    log::info!("read data  {:?}", &data[..10]);
+
+    for i in 0..WRITE_SIZE/ BLOCK_SIZE{
+        let offset = (i * BLOCK_SIZE) as i64;
+        let write_data = vec![0x41 as u8; BLOCK_SIZE];
+        let read_data = ext4
+            .ext4_file_read(inode_ref.inode_num as u64, BLOCK_SIZE as u32, offset)
+            .unwrap();
+        if read_data != write_data{
+            log::info!("Data mismatch at block {:x}", i);
+        }
+    }
 
 }
