@@ -165,3 +165,7 @@ let r = ext4.file_remove(&path);
 let path = "dir_to_remove";
 let r = ext4.dir_remove(ROOT_INODE, &path);
 ```
+
+
+# known bugs
+ext4_valid_extent check fail in linux (Some part of the block region overlaps with some other filesystem metadata blocks)
