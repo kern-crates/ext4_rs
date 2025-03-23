@@ -1,4 +1,4 @@
-# a cross-platform rust ext4 crate
+# An os independent rust ext4 file system
 
 [![Crates.io Version](https://img.shields.io/crates/v/ext4_rs)](https://crates.io/crates/ext4_rs)
 [![Crates.io License](https://img.shields.io/crates/l/ext4_rs)](LICENSE)
@@ -136,10 +136,9 @@ assert!(r.is_ok(), "dir make error {:?}", r.err());
 ```rust
 // file create/write
 let inode_mode = InodeFileType::S_IFREG.bits();
-let inode_ref = ext4.create(ROOT_INODE, "511M.txt", inode_mode).unwrap();
+let inode_ref = ext4.create(ROOT_INODE, "512M.txt", inode_mode).unwrap();
 
-// test 511M  for 512M we need split the extent tree
-const WRITE_SIZE: usize = (0x100000 * 511);
+const WRITE_SIZE: usize = (0x100000 * 512);
 let write_buf = vec![0x41 as u8; WRITE_SIZE];
 let r = ext4.write_at(inode_ref.inode_num, 0, &write_buf);
 ```
