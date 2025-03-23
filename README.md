@@ -168,6 +168,6 @@ let r = ext4.dir_remove(ROOT_INODE, &path);
 
 
 # known bugs
-1. ext4_valid_extent check fail in linux (Some part of the block region overlaps with some other filesystem metadata blocks)
+1. ext4_valid_extent check fails in linux due to block allocation using system reserved blocks.
 
 2. extent block checksum not set
