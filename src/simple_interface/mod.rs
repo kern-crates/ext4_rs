@@ -111,6 +111,19 @@ impl Ext4 {
         self.generic_open(path, &mut parent_inode_num, false, filetype.bits(), &mut 0)
     }
 
+    /// Get dir entries of a inode
+    ///
+    /// Params:
+    /// inode: u32 - inode number of the directory
+    /// assert!(inode.is_dir());
+    ///
+    /// Returns:
+    /// `Vec<Ext4DirEntry>` - list of directory entries
+    pub fn ext4_dir_get_entries(&self, inode: u32) -> Vec<Ext4DirEntry> {
+        let mut entries = self.dir_get_entries(inode);
+        entries
+    }
+
     /// Read data from a file starting from a given offset.
     ///
     /// Reads data from the file starting at the specified inode (`ino`), with a given offset and size.
