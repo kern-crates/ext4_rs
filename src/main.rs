@@ -99,10 +99,38 @@ impl BlockDevice for Disk {
     }
 }
 
+fn test_raw_block_device_write(block_device: Arc<dyn BlockDevice>, size_mb: usize) {
+    let write_size = size_mb * 1024 * 1024;
+    let mut buffer = vec![0x41u8; write_size];
+    
+    // Start from block 1000 to avoid overwriting important data
+    let start_block = 1000;
+    let start_offset = start_block * BLOCK_SIZE;
+    
+    log::info!("Starting raw BlockDevice write test: {} MB", size_mb);
+    let start_time = std::time::Instant::now();
+    
+    // Write in BLOCK_SIZE chunks
+    let mut written = 0;
+    while written < write_size {
+        let write_size = std::cmp::min(BLOCK_SIZE, write_size - written);
+        let offset = start_offset + written;
+        block_device.write_offset(offset, &buffer[written..written + write_size]);
+        written += write_size;
+    }
+    
+    let end_time = start_time.elapsed();
+    let speed_mb_per_sec = (write_size as f64 / 1024.0 / 1024.0) / end_time.as_secs_f64();
+    
+    log::info!("Raw BlockDevice write speed: {:.2} MB/s", speed_mb_per_sec);
+    log::info!("Total time: {:.2} seconds", end_time.as_secs_f64());
+}
+
 fn main() {
     log::set_logger(&SimpleLogger).unwrap();
     log::set_max_level(LevelFilter::Trace);
     let disk = Arc::new(Disk {});
+    let block_device = disk.clone();  // Clone before using
     let ext4 = Ext4::open(disk);
 
     // file read
@@ -160,11 +188,22 @@ fn main() {
     let inode_perm = (InodePerm::S_IREAD | InodePerm::S_IWRITE).bits();
     let inode_ref = ext4.create(ROOT_INODE, "4G.txt", inode_mode | inode_perm).unwrap();
     log::info!("----write file----");
-    const WRITE_SIZE: usize = (1024 * 1024 * 1024 * 4);
+    const WRITE_SIZE: usize = (1024 * 1024 * 1024 * 1);
     let write_buf = vec![0x41 as u8; WRITE_SIZE];
+    
+    // Record start time
+    let start_time = std::time::Instant::now();
     let r = ext4.write_at(inode_ref.inode_num, 0, &write_buf);
+    let end_time = start_time.elapsed();
+    
+    // Calculate and display write speed
+    let write_speed = (WRITE_SIZE as f64 / 1024.0 / 1024.0) / (end_time.as_secs_f64());
+    log::info!("Write speed: {:.2} MB/s", write_speed);
+    log::info!("Total time: {:.2} seconds", end_time.as_secs_f64());
 
-
+    log::info!("----write done verifying----");
+    const GB: usize = 1024 * 1024 * 1024 * 4;
+    let mut last_gb = 0;
     for i in 0..WRITE_SIZE/ BLOCK_SIZE{
         let offset = (i * BLOCK_SIZE) as i64;
         let write_data = vec![0x41 as u8; BLOCK_SIZE];
@@ -174,6 +213,19 @@ fn main() {
         if read_data != write_data{
             log::info!("Data mismatch at block {:x}", i);
         }
+
+        
+        let current_gb = (i * BLOCK_SIZE) / GB;
+        if current_gb > last_gb {
+            last_gb = current_gb;
+            log::info!(
+                "Progress: {} / {} GB verified",
+                current_gb,
+                WRITE_SIZE / GB
+            );
+        }
     }
 
+    // Test raw BlockDevice write speed
+    // test_raw_block_device_write(block_device, 100); // Test with 100MB
 }
