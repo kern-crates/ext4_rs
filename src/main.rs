@@ -188,7 +188,7 @@ fn main() {
     let inode_perm = (InodePerm::S_IREAD | InodePerm::S_IWRITE).bits();
     let inode_ref = ext4.create(ROOT_INODE, "4G.txt", inode_mode | inode_perm).unwrap();
     log::info!("----write file----");
-    const WRITE_SIZE: usize = (1024 * 1024 * 1024 * 1);
+    const WRITE_SIZE: usize = (1024 * 1024 * 1024 * 4);
     let write_buf = vec![0x41 as u8; WRITE_SIZE];
     
     // Record start time
@@ -202,30 +202,29 @@ fn main() {
     log::info!("Total time: {:.2} seconds", end_time.as_secs_f64());
 
     log::info!("----write done verifying----");
-    const GB: usize = 1024 * 1024 * 1024 * 4;
-    let mut last_gb = 0;
-    for i in 0..WRITE_SIZE/ BLOCK_SIZE{
+    const BLOCKS_PER_128MB: usize = 32768; // 128MB / 4KB = 32768 blocks
+    let mut last_progress = 0;
+    for i in 0..WRITE_SIZE/ BLOCK_SIZE {
         let offset = (i * BLOCK_SIZE) as i64;
         let write_data = vec![0x41 as u8; BLOCK_SIZE];
         let read_data = ext4
             .ext4_file_read(inode_ref.inode_num as u64, BLOCK_SIZE as u32, offset)
             .unwrap();
-        if read_data != write_data{
+        if read_data != write_data {
             log::info!("Data mismatch at block {:x}", i);
+            panic!("Data mismatch at block {:x}", i);
         }
 
-        
-        let current_gb = (i * BLOCK_SIZE) / GB;
-        if current_gb > last_gb {
-            last_gb = current_gb;
+        // 每128MB打印一次进度
+        let current_progress = i / BLOCKS_PER_128MB;
+        if current_progress > last_progress {
+            last_progress = current_progress;
+            let progress_mb = current_progress * 128;
             log::info!(
-                "Progress: {} / {} GB verified",
-                current_gb,
-                WRITE_SIZE / GB
+                "Progress: {} MB / {} MB verified",
+                progress_mb,
+                WRITE_SIZE / (1024 * 1024)
             );
         }
     }
-
-    // Test raw BlockDevice write speed
-    // test_raw_block_device_write(block_device, 100); // Test with 100MB
 }
