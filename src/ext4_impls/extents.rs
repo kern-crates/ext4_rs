@@ -256,34 +256,37 @@ impl Ext4 {
         left_ext: &mut Ext4Extent,
         right_ext: &Ext4Extent,
     ) -> Result<()> {
-
-        let unwritten = left_ext.is_unwritten();
-        let len = left_ext.get_actual_len() + right_ext.get_actual_len();
-        left_ext.set_actual_len(len);
-        if unwritten {
-            left_ext.mark_unwritten();
-        }
-        let depth = search_path.depth as usize;
-
-        let header = search_path.path[depth].header;
-
-        if header.max_entries_count > 4 {
-            let node = &search_path.path[depth];
-            let block = node.pblock_of_node;
-            let new_ex_offset = core::mem::size_of::<Ext4ExtentHeader>() + core::mem::size_of::<Ext4Extent>() * (node.position);
-            let mut ext4block = Block::load(self.block_device.clone(), block * BLOCK_SIZE);
-            let left_ext:&mut Ext4Extent = ext4block.read_offset_as_mut(new_ex_offset);
-
-            let unwritten = left_ext.is_unwritten();
-            let len = left_ext.get_actual_len() + right_ext.get_actual_len();
-            left_ext.set_actual_len(len);
+        // Merge two extents' contents
+        fn merge_extent_contents(left: &mut Ext4Extent, right: &Ext4Extent) {
+            let unwritten = left.is_unwritten();
+            let len = left.get_actual_len() + right.get_actual_len();
+            left.set_actual_len(len);
             if unwritten {
-                left_ext.mark_unwritten();
+                left.mark_unwritten();
             }
+        }
 
+        // First merge the extents in memory
+        merge_extent_contents(left_ext, right_ext);
+
+        // If we're not at the root node (max_entries_count > 4 indicates a non-root node),
+        // we need to update the extent on disk
+        let depth = search_path.depth as usize;
+        let node = &search_path.path[depth];
+        
+        if node.pblock_of_node != 0 {  // Not at root node
+            let block = node.pblock_of_node;
+            let new_ex_offset = core::mem::size_of::<Ext4ExtentHeader>() 
+                + core::mem::size_of::<Ext4Extent>() * node.position;
+            
+            // Load the block and update the extent
+            let mut ext4block = Block::load(self.block_device.clone(), block * BLOCK_SIZE);
+            let disk_ext: &mut Ext4Extent = ext4block.read_offset_as_mut(new_ex_offset);
+            merge_extent_contents(disk_ext, right_ext);
+
+            // Write back to disk
             ext4block.sync_blk_to_disk(self.block_device.clone());
         }
-
 
         Ok(())
     }
