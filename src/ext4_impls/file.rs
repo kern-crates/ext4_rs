@@ -2,6 +2,8 @@ use crate::prelude::*;
 use crate::return_errno_with_message;
 use crate::utils::path_check;
 use crate::ext4_defs::*;
+use core::cmp::max;
+// use std::time::{Duration, Instant};
 
 impl Ext4 {
     /// Link a child inode to a parent directory
@@ -264,7 +266,8 @@ impl Ext4 {
 
         // Calculate the start and end block index
         let iblock_start = offset / BLOCK_SIZE;
-        let iblock_last = (offset + write_buf_len + BLOCK_SIZE - 1) / BLOCK_SIZE; // round up to include the last partial block
+        let iblock_last = (offset + write_buf_len + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        let total_blocks_needed = iblock_last - iblock_start;
 
         // start block index
         let mut iblk_idx = iblock_start;
@@ -272,65 +275,104 @@ impl Ext4 {
 
         // Calculate the unaligned size
         let unaligned = offset % BLOCK_SIZE;
+        if unaligned > 0 {
+            log::trace!("[Alignment] Unaligned start: {} bytes", unaligned);
+        }
 
         // Buffer to keep track of written bytes
         let mut written = 0;
+        let mut total_blocks = 0;
+        let mut new_blocks = 0;
 
-        // Start bgid
+
+        // Start bgid for block allocation
         let mut start_bgid = 1;
+
+        // Pre-allocate blocks if needed
+        let blocks_to_allocate = if iblk_idx >= ifile_blocks as usize {
+            total_blocks_needed
+        } else {
+            max(0, total_blocks_needed - (ifile_blocks as usize - iblk_idx))
+        };
+
+        if blocks_to_allocate > 0 {
+            log::trace!("[Pre-allocation] Allocating {} blocks", blocks_to_allocate);
+            
+            // Use the new batch allocation function
+            let allocated_blocks = self.balloc_alloc_block_batch(&mut inode_ref, &mut start_bgid, blocks_to_allocate)?;
+            
+            // Create a single extent for all allocated blocks
+            if !allocated_blocks.is_empty() {
+                let mut newex = Ext4Extent::default();
+                newex.first_block = iblk_idx as u32;
+                newex.store_pblock(allocated_blocks[0]);
+                newex.block_count = allocated_blocks.len() as u16;
+                self.insert_extent(&mut inode_ref, &mut newex)?;
+            }
+            
+            new_blocks += blocks_to_allocate;
+        }
 
         // Unaligned write
         if unaligned > 0 {
             let len = min(write_buf_len, BLOCK_SIZE - unaligned);
-            // Get the physical block id, if the block is not present, append a new block
-            let pblock_idx = if iblk_idx < ifile_blocks as usize {
-                self.get_pblock_idx(&inode_ref, iblk_idx as u32)?
-            } else {
-                // physical block not exist, append a new block
-                self.append_inode_pblk_from(&mut inode_ref, &mut start_bgid)?
-            };
+            log::trace!("[Unaligned Write] Writing {} bytes", len);
+            
+            // Get the physical block id
+            let pblock_idx = self.get_pblock_idx(&inode_ref, iblk_idx as u32)?;
+            total_blocks += 1;
 
-            let mut block =
-                Block::load(self.block_device.clone(), pblock_idx as usize * BLOCK_SIZE);
 
+            let mut block = Block::load(self.block_device.clone(), pblock_idx as usize * BLOCK_SIZE);
             block.write_offset(unaligned, &write_buf[..len], len);
+
+
             block.sync_blk_to_disk(self.block_device.clone());
             drop(block);
 
-
             written += len;
             iblk_idx += 1;
+            
         }
 
         // Aligned write
+        let mut aligned_blocks = 0;
+        log::trace!("[Aligned Write] Starting aligned writes for {} blocks", (write_buf_len - written + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        
         while written < write_buf_len {
-            // Get the physical block id, if the block is not present, append a new block
-            let pblock_idx = if iblk_idx < ifile_blocks as usize {
-                self.get_pblock_idx(&inode_ref, iblk_idx as u32)?
-            } else {
-                // physical block not exist, append a new block
-                self.append_inode_pblk_from(&mut inode_ref, &mut start_bgid)?
-            };
+            aligned_blocks += 1;
+            
+            // Get the physical block id
+            let pblock_idx = self.get_pblock_idx(&inode_ref, iblk_idx as u32)?;
+            total_blocks += 1;
+
 
             let block_offset = pblock_idx as usize * BLOCK_SIZE;
             let mut block = Block::load(self.block_device.clone(), block_offset);
             let write_size = min(BLOCK_SIZE, write_buf_len - written);
             block.write_offset(0, &write_buf[written..written + write_size], write_size);
+
             block.sync_blk_to_disk(self.block_device.clone());
             drop(block);
+            
             written += write_size;
             iblk_idx += 1;
-        }
 
+            if aligned_blocks % 1000 == 0 {
+                log::trace!("[Progress] Written {} blocks, {} bytes", aligned_blocks, written);
+            }
+        }
+        
         // Update file size if necessary
         if offset + write_buf_len > file_size as usize {
-            // log::trace!("set file size {:x}", offset + write_buf_len);
-            inode_ref
-                .inode
-                .set_size((offset + write_buf_len) as u64);
-
+            inode_ref.inode.set_size((offset + write_buf_len) as u64);
             self.write_back_inode(&mut inode_ref);
         }
+
+        log::trace!("=== Write Performance Summary ===");
+        log::trace!("[Blocks] Total blocks: {}, New blocks: {}, Aligned blocks: {}", 
+            total_blocks, new_blocks, aligned_blocks);
+        log::trace!("=== End of Write Analysis ===");
 
         Ok(written)
     }
@@ -405,3 +447,192 @@ impl Ext4 {
         Ok(EOK)
     }
 }
+
+//// Write Performance Analysis
+// impl Ext4 {
+    // /// Write data to a file at a given offset
+    // ///
+    // /// Params:
+    // /// inode: u32 - inode number of the file
+    // /// offset: usize - offset from where to write
+    // /// write_buf: &[u8] - buffer to write the data from
+    // ///
+    // /// Returns:
+    // /// `Result<usize>` - number of bytes written
+    // pub fn write_at(&self, inode: u32, offset: usize, write_buf: &[u8]) -> Result<usize> {
+    //     let total_start = Instant::now();
+    //     log::info!("=== Write Performance Analysis ===");
+    //     log::info!("Write size: {} bytes", write_buf.len());
+        
+    //     // write buf is empty, return 0
+    //     let write_buf_len = write_buf.len();
+    //     if write_buf_len == 0 {
+    //         return Ok(0);
+    //     }
+
+    //     // get the inode reference
+    //     let inode_start = Instant::now();
+    //     let mut inode_ref = self.get_inode_ref(inode);
+    //     let inode_time = inode_start.elapsed();
+    //     log::info!("[Time] Get inode: {:.3}ms", inode_time.as_secs_f64() * 1000.0);
+
+    //     // Get the file size
+    //     let file_size = inode_ref.inode.size();
+
+    //     // Calculate the start and end block index
+    //     let iblock_start = offset / BLOCK_SIZE;
+    //     let iblock_last = (offset + write_buf_len + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    //     let total_blocks_needed = iblock_last - iblock_start;
+    //     log::info!("[Blocks] Start block: {}, Last block: {}, Total blocks needed: {}", 
+    //         iblock_start, iblock_last, total_blocks_needed);
+
+    //     // start block index
+    //     let mut iblk_idx = iblock_start;
+    //     let ifile_blocks = (file_size + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64;
+
+    //     // Calculate the unaligned size
+    //     let unaligned = offset % BLOCK_SIZE;
+    //     if unaligned > 0 {
+    //         log::info!("[Alignment] Unaligned start: {} bytes", unaligned);
+    //     }
+
+    //     // Buffer to keep track of written bytes
+    //     let mut written = 0;
+    //     let mut total_blocks = 0;
+    //     let mut new_blocks = 0;
+    //     let mut total_alloc_time = Duration::new(0, 0);
+    //     let mut total_write_time = Duration::new(0, 0);
+    //     let mut total_sync_time = Duration::new(0, 0);
+
+    //     // Start bgid for block allocation
+    //     let mut start_bgid = 1;
+
+    //     // Pre-allocate blocks if needed
+    //     let blocks_to_allocate = if iblk_idx >= ifile_blocks as usize {
+    //         total_blocks_needed
+    //     } else {
+    //         max(0, total_blocks_needed - (ifile_blocks as usize - iblk_idx))
+    //     };
+
+    //     if blocks_to_allocate > 0 {
+    //         let prealloc_start = Instant::now();
+    //         log::info!("[Pre-allocation] Allocating {} blocks", blocks_to_allocate);
+            
+    //         // Use the new batch allocation function
+    //         let allocated_blocks = self.balloc_alloc_block_new(&mut inode_ref, &mut start_bgid, blocks_to_allocate)?;
+            
+    //         // Create a single extent for all allocated blocks
+    //         if !allocated_blocks.is_empty() {
+    //             let mut newex = Ext4Extent::default();
+    //             newex.first_block = iblk_idx as u32;
+    //             newex.store_pblock(allocated_blocks[0]);
+    //             newex.block_count = allocated_blocks.len() as u16;
+    //             self.insert_extent(&mut inode_ref, &mut newex)?;
+    //         }
+            
+    //         let prealloc_time = prealloc_start.elapsed();
+    //         log::info!("[Time] Pre-allocation: {:.3}ms", prealloc_time.as_secs_f64() * 1000.0);
+    //         new_blocks += blocks_to_allocate;
+    //     }
+
+    //     // Unaligned write
+    //     if unaligned > 0 {
+    //         let unaligned_start = Instant::now();
+    //         let len = min(write_buf_len, BLOCK_SIZE - unaligned);
+    //         log::info!("[Unaligned Write] Writing {} bytes", len);
+            
+    //         // Get the physical block id
+    //         let pblock_start = Instant::now();
+    //         let pblock_idx = self.get_pblock_idx(&inode_ref, iblk_idx as u32)?;
+    //         let alloc_time = pblock_start.elapsed();
+    //         total_alloc_time += alloc_time;
+    //         total_blocks += 1;
+
+    //         let write_start = Instant::now();
+    //         let mut block = Block::load(self.block_device.clone(), pblock_idx as usize * BLOCK_SIZE);
+    //         block.write_offset(unaligned, &write_buf[..len], len);
+    //         let write_time = write_start.elapsed();
+    //         total_write_time += write_time;
+
+    //         let sync_start = Instant::now();
+    //         block.sync_blk_to_disk(self.block_device.clone());
+    //         let sync_time = sync_start.elapsed();
+    //         total_sync_time += sync_time;
+    //         drop(block);
+
+    //         written += len;
+    //         iblk_idx += 1;
+            
+    //         let unaligned_time = unaligned_start.elapsed();
+    //         log::info!("[Time] Total unaligned write: {:.3}ms", unaligned_time.as_secs_f64() * 1000.0);
+    //     }
+
+    //     // Aligned write
+    //     let aligned_start = Instant::now();
+    //     let mut aligned_blocks = 0;
+    //     log::info!("[Aligned Write] Starting aligned writes for {} blocks", (write_buf_len - written + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        
+    //     while written < write_buf_len {
+    //         aligned_blocks += 1;
+            
+    //         // Get the physical block id
+    //         let pblock_start = Instant::now();
+    //         let pblock_idx = self.get_pblock_idx(&inode_ref, iblk_idx as u32)?;
+    //         let alloc_time = pblock_start.elapsed();
+    //         total_alloc_time += alloc_time;
+    //         total_blocks += 1;
+
+    //         let write_start = Instant::now();
+    //         let block_offset = pblock_idx as usize * BLOCK_SIZE;
+    //         let mut block = Block::load(self.block_device.clone(), block_offset);
+    //         let write_size = min(BLOCK_SIZE, write_buf_len - written);
+    //         block.write_offset(0, &write_buf[written..written + write_size], write_size);
+    //         let write_time = write_start.elapsed();
+    //         total_write_time += write_time;
+
+    //         let sync_start = Instant::now();
+    //         block.sync_blk_to_disk(self.block_device.clone());
+    //         let sync_time = sync_start.elapsed();
+    //         total_sync_time += sync_time;
+    //         drop(block);
+            
+    //         written += write_size;
+    //         iblk_idx += 1;
+
+    //         if aligned_blocks % 1000 == 0 {
+    //             log::info!("[Progress] Written {} blocks, {} bytes", aligned_blocks, written);
+    //         }
+    //     }
+        
+    //     let aligned_time = aligned_start.elapsed();
+    //     log::info!("[Time] Total aligned write: {:.3}ms", aligned_time.as_secs_f64() * 1000.0);
+
+    //     // Update file size if necessary
+    //     let update_start = Instant::now();
+    //     if offset + write_buf_len > file_size as usize {
+    //         inode_ref.inode.set_size((offset + write_buf_len) as u64);
+    //         self.write_back_inode(&mut inode_ref);
+    //     }
+    //     let update_time = update_start.elapsed();
+    //     log::info!("[Time] Inode update: {:.3}ms", update_time.as_secs_f64() * 1000.0);
+
+    //     let total_time = total_start.elapsed();
+    //     log::info!("=== Write Performance Summary ===");
+    //     log::info!("[Blocks] Total blocks: {}, New blocks: {}, Aligned blocks: {}", 
+    //         total_blocks, new_blocks, aligned_blocks);
+    //     log::info!("[Time] Average block allocation: {:.3}ms", 
+    //         (total_alloc_time.as_secs_f64() * 1000.0) / total_blocks as f64);
+    //     log::info!("[Time] Average block write: {:.3}ms", 
+    //         (total_write_time.as_secs_f64() * 1000.0) / total_blocks as f64);
+    //     log::info!("[Time] Average block sync: {:.3}ms", 
+    //         (total_sync_time.as_secs_f64() * 1000.0) / total_blocks as f64);
+    //     log::info!("[Time] Total write time: {:.3}ms", total_time.as_secs_f64() * 1000.0);
+    //     log::info!("[Speed] Write speed: {:.2} MB/s", 
+    //         (write_buf_len as f64 / 1024.0 / 1024.0) / total_time.as_secs_f64());
+    //     log::info!("[Efficiency] Write efficiency: {:.2}%", 
+    //         (written as f64 / (total_blocks * BLOCK_SIZE) as f64) * 100.0);
+    //     log::info!("=== End of Write Analysis ===");
+
+    //     Ok(written)
+    // }    
+// }

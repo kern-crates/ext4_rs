@@ -2,6 +2,73 @@ use crate::ext4_defs::*;
 use crate::prelude::*;
 use crate::return_errno_with_message;
 use crate::utils::bitmap::*;
+use core::array;
+
+// Cache for block group information
+#[derive(Clone, Copy)]
+struct BlockGroupCache {
+    bitmap: [u8; BLOCK_SIZE],
+    free_blocks: u64,
+    last_used_idx: u32,
+}
+
+impl BlockGroupCache {
+    fn new(bitmap: &[u8], free_blocks: u64) -> Self {
+        let mut new_bitmap = [0u8; BLOCK_SIZE];
+        new_bitmap.copy_from_slice(bitmap);
+        Self {
+            bitmap: new_bitmap,
+            free_blocks,
+            last_used_idx: 0,
+        }
+    }
+}
+
+// Simple fixed-size cache for block groups
+struct BlockGroupCacheManager {
+    caches: [(u32, BlockGroupCache); 8], // Cache for up to 8 block groups
+    len: usize,
+}
+
+impl BlockGroupCacheManager {
+    fn new() -> Self {
+        let empty_cache = BlockGroupCache {
+            bitmap: [0; BLOCK_SIZE],
+            free_blocks: 0,
+            last_used_idx: 0,
+        };
+        Self {
+            caches: array::from_fn(|_| (0, empty_cache)),
+            len: 0,
+        }
+    }
+
+    fn get(&mut self, bgid: u32) -> Option<&mut BlockGroupCache> {
+        for i in 0..self.len {
+            if self.caches[i].0 == bgid {
+                return Some(&mut self.caches[i].1);
+            }
+        }
+        None
+    }
+
+    fn insert(&mut self, bgid: u32, cache: BlockGroupCache) {
+        if self.len < 8 {
+            self.caches[self.len] = (bgid, cache);
+            self.len += 1;
+        } else {
+            // Simple LRU: remove the first entry and shift others
+            for i in 0..self.len-1 {
+                self.caches[i] = self.caches[i+1];
+            }
+            self.caches[self.len-1] = (bgid, cache);
+        }
+    }
+
+    fn iter_caches(&self) -> impl Iterator<Item = &(u32, BlockGroupCache)> {
+        self.caches[..self.len].iter()
+    }
+}
 
 impl Ext4 {
     /// Compute number of block group from block address.
@@ -195,10 +262,11 @@ impl Ext4 {
         let mut alloc: Ext4Fsblk = 0;
         let super_block = &self.super_block;
         let blocks_per_group = super_block.blocks_per_group();
+        // Maximum number of blocks that can be represented by a bitmap block
+        let max_blocks_in_bitmap = BLOCK_SIZE * 8;
 
         let mut bgid = *start_bgid;
         let mut idx_in_bg = 0;
-
 
         let block_group_count = super_block.block_group_count();
         let mut count = block_group_count;
@@ -229,6 +297,15 @@ impl Ext4 {
                 idx_in_bg = first_in_bg_index;
             }
 
+            // Ensure idx_in_bg doesn't exceed bitmap size
+            if idx_in_bg >= max_blocks_in_bitmap as u32 {
+                // Try next block group if we've reached the end of this bitmap
+                bgid = (bgid + 1) % block_group_count;
+                count -= 1;
+                idx_in_bg = 0;
+                continue;
+            }
+
             // Load block with bitmap
             let bmp_blk_adr = block_group.get_block_bitmap_block(super_block);
             let mut bitmap_block =
@@ -250,8 +327,7 @@ impl Ext4 {
             }
 
             // Try to find free block near to goal
-            let blk_in_bg = blocks_per_group;
-            let end_idx = min((idx_in_bg + 63) & !63, blk_in_bg);
+            let end_idx = min((idx_in_bg + 63) & !63, max_blocks_in_bitmap as u32);
 
             for tmp_idx in (idx_in_bg + 1)..end_idx {
                 if ext4_bmap_is_bit_clr(&bitmap_block.data, tmp_idx) {
@@ -269,7 +345,7 @@ impl Ext4 {
 
             // Find free bit in bitmap
             let mut rel_blk_idx = 0;
-            if ext4_bmap_bit_find_clr(&bitmap_block.data, idx_in_bg, blk_in_bg, &mut rel_blk_idx) {
+            if ext4_bmap_bit_find_clr(&bitmap_block.data, idx_in_bg, max_blocks_in_bitmap as u32, &mut rel_blk_idx) {
                 ext4_bmap_bit_set(&mut bitmap_block.data, rel_blk_idx);
                 block_group.set_block_group_balloc_bitmap_csum(super_block, &bitmap_block.data);
                 self.block_device
@@ -284,6 +360,7 @@ impl Ext4 {
             // No free block found in this group, try other block groups
             bgid = (bgid + 1) % block_group_count;
             count -= 1;
+            idx_in_bg = 0;
         }
 
         return_errno_with_message!(Errno::ENOSPC, "No free blocks available in all block groups");
@@ -384,5 +461,196 @@ impl Ext4 {
 
             bg_first += 1;
         }
+    }
+
+    /// Optimized block allocation with caching and batch allocation support
+    /// 
+    /// Params:
+    /// `inode_ref` - Reference to the inode
+    /// `start_bgid` - Starting block group ID
+    /// `count` - Number of blocks to allocate (1 for single block)
+    /// 
+    /// Returns:
+    /// `Result<Vec<Ext4Fsblk>>` - Vector of allocated block numbers
+    pub fn balloc_alloc_block_batch(
+        &self,
+        inode_ref: &mut Ext4InodeRef,
+        start_bgid: &mut u32,
+        count: usize,
+    ) -> Result<Vec<Ext4Fsblk>> {
+        let super_block = &self.super_block;
+        let blocks_per_group = super_block.blocks_per_group();
+        let max_blocks_in_bitmap = BLOCK_SIZE * 8;
+        let max_bitmap_index = max_blocks_in_bitmap - 1;
+        let block_group_count = super_block.block_group_count();
+        
+        // Use fixed-size cache instead of HashMap
+        let mut bg_cache = BlockGroupCacheManager::new();
+        let mut allocated_blocks = Vec::with_capacity(count);
+        let mut remaining = count;
+        let mut bgid = *start_bgid;
+        let mut search_count = block_group_count;
+
+        while remaining > 0 && search_count > 0 {
+            // Get or load block group cache
+            let mut block_group = if bg_cache.get(bgid).is_none() {
+                let mut bg = Ext4BlockGroup::load_new(self.block_device.clone(), super_block, bgid as usize);
+                let free_blocks = bg.get_free_blocks_count();
+                if free_blocks == 0 {
+                    bgid = (bgid + 1) % block_group_count;
+                    search_count -= 1;
+                    continue;
+                }
+                
+                // Load bitmap into cache
+                let bmp_blk_adr = bg.get_block_bitmap_block(super_block);
+                let bitmap = self.block_device.read_offset(bmp_blk_adr as usize * BLOCK_SIZE);
+                bg_cache.insert(bgid, BlockGroupCache::new(&bitmap, free_blocks));
+                bg
+            } else {
+                Ext4BlockGroup::load_new(self.block_device.clone(), super_block, bgid as usize)
+            };
+
+            let cache = bg_cache.get(bgid).unwrap();
+            if cache.free_blocks == 0 {
+                bgid = (bgid + 1) % block_group_count;
+                search_count -= 1;
+                continue;
+            }
+
+            // Ensure last_used_idx is within bounds
+            if cache.last_used_idx >= max_blocks_in_bitmap as u32 {
+                cache.last_used_idx = 0;
+            }
+
+            // Find contiguous free blocks
+            let mut start_idx = cache.last_used_idx;
+            let mut found_blocks = 0;
+            let mut block_start = 0;
+            
+            // First try to find blocks near the last used index
+            while start_idx <= max_bitmap_index as u32 && found_blocks < remaining {
+                if ext4_bmap_is_bit_clr(&cache.bitmap, start_idx) {
+                    if found_blocks == 0 {
+                        block_start = start_idx;
+                    }
+                    found_blocks += 1;
+                } else {
+                    found_blocks = 0;
+                    block_start = 0;
+                }
+                start_idx += 1;
+            }
+
+            // If not enough contiguous blocks found, try from the beginning
+            if found_blocks < remaining {
+                start_idx = 0;
+                while start_idx < cache.last_used_idx && found_blocks < remaining {
+                    if ext4_bmap_is_bit_clr(&cache.bitmap, start_idx) {
+                        if found_blocks == 0 {
+                            block_start = start_idx;
+                        }
+                        found_blocks += 1;
+                    } else {
+                        found_blocks = 0;
+                        block_start = 0;
+                    }
+                    start_idx += 1;
+                }
+            }
+
+            if found_blocks > 0 {
+                // Ensure we don't exceed bitmap bounds
+                if block_start + found_blocks as u32 > max_blocks_in_bitmap as u32 {
+                    found_blocks = (max_blocks_in_bitmap - block_start as usize) as usize;
+                }
+
+                // Mark blocks as allocated in bitmap
+                for i in 0..found_blocks {
+                    let idx = block_start + i as u32;
+                    if idx <= max_bitmap_index as u32 {
+                        ext4_bmap_bit_set(&mut cache.bitmap, idx);
+                    }
+                }
+                cache.last_used_idx = (block_start + found_blocks as u32).min(max_bitmap_index as u32);
+                cache.free_blocks -= found_blocks as u64;
+
+                // Write back bitmap
+                let bmp_blk_adr = block_group.get_block_bitmap_block(super_block);
+                self.block_device.write_offset(bmp_blk_adr as usize * BLOCK_SIZE, &cache.bitmap);
+
+                // Update block group checksum
+                block_group.set_block_group_balloc_bitmap_csum(super_block, &cache.bitmap);
+
+                // Add allocated blocks to result
+                for i in 0..found_blocks {
+                    let idx = block_start + i as u32;
+                    if idx <= max_bitmap_index as u32 {
+                        let block_num = self.bg_idx_to_addr(idx, bgid);
+                        allocated_blocks.push(block_num);
+                    }
+                }
+
+                remaining -= found_blocks;
+                if remaining == 0 {
+                    break;
+                }
+            }
+
+            // Try next block group if we couldn't find enough blocks
+            bgid = (bgid + 1) % block_group_count;
+            search_count -= 1;
+            // Reset last_used_idx for the next block group
+            if let Some(cache) = bg_cache.get(bgid) {
+                cache.last_used_idx = 0;
+            }
+        }
+
+        if remaining > 0 {
+            // Free any blocks we allocated before the error
+            if !allocated_blocks.is_empty() {
+                self.balloc_free_blocks(inode_ref, allocated_blocks[0], allocated_blocks.len() as u32);
+            }
+            return_errno_with_message!(Errno::ENOSPC, "Not enough free blocks available");
+        }
+
+        // Batch update metadata
+        if !allocated_blocks.is_empty() {
+            let mut super_block = self.super_block;
+            let block_size = BLOCK_SIZE as u64;
+            let allocated_count = allocated_blocks.len() as u64;
+
+            // Update superblock
+            let mut super_blk_free_blocks = super_block.free_blocks_count();
+            super_blk_free_blocks -= allocated_count;
+            super_block.set_free_blocks_count(super_blk_free_blocks);
+            super_block.sync_to_disk_with_csum(self.block_device.clone());
+
+            // Update inode
+            let mut inode_blocks = inode_ref.inode.blocks_count();
+            inode_blocks += (allocated_count * block_size) / EXT4_INODE_BLOCK_SIZE as u64;
+            inode_ref.inode.set_blocks_count(inode_blocks);
+            self.write_back_inode(inode_ref);
+
+            // Update block groups
+            for (bgid, cache) in bg_cache.iter_caches() {
+                if cache.free_blocks < blocks_per_group as u64 {
+                    let mut block_group = Ext4BlockGroup::load_new(
+                        self.block_device.clone(),
+                        &super_block,
+                        *bgid as usize
+                    );
+                    block_group.set_free_blocks_count(cache.free_blocks as u32);
+                    block_group.sync_to_disk_with_csum(
+                        self.block_device.clone(),
+                        *bgid as usize,
+                        &super_block
+                    );
+                }
+            }
+        }
+
+        *start_bgid = bgid;
+        Ok(allocated_blocks)
     }
 }
