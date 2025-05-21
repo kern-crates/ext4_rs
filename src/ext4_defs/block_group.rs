@@ -7,30 +7,30 @@ use super::*;
 #[derive(Debug, Default, Clone, Copy)]
 #[repr(C, packed)]
 pub struct Ext4BlockGroup {
-    pub block_bitmap_lo: u32,            // 块位图块
-    pub inode_bitmap_lo: u32,            // 节点位图块
-    pub inode_table_first_block_lo: u32, // 节点表块
-    pub free_blocks_count_lo: u16,       // 空闲块数
-    pub free_inodes_count_lo: u16,       // 空闲节点数
-    pub used_dirs_count_lo: u16,         // 目录数
+    pub block_bitmap_lo: u32,            // Block bitmap block
+    pub inode_bitmap_lo: u32,            // Inode bitmap block
+    pub inode_table_first_block_lo: u32, // Inode table block
+    pub free_blocks_count_lo: u16,       // Free blocks count
+    pub free_inodes_count_lo: u16,       // Free inodes count
+    pub used_dirs_count_lo: u16,         // Directories count
     pub flags: u16,                      // EXT4_BG_flags (INODE_UNINIT, etc)
-    pub exclude_bitmap_lo: u32,          // 快照排除位图
+    pub exclude_bitmap_lo: u32,          // Snapshot exclusion bitmap
     pub block_bitmap_csum_lo: u16,       // crc32c(s_uuid+grp_num+bbitmap) LE
     pub inode_bitmap_csum_lo: u16,       // crc32c(s_uuid+grp_num+ibitmap) LE
-    pub itable_unused_lo: u16,           // 未使用的节点数
+    pub itable_unused_lo: u16,           // Unused inodes count
     pub checksum: u16,                   // crc16(sb_uuid+group+desc)
 
-    pub block_bitmap_hi: u32,            // 块位图块 MSB
-    pub inode_bitmap_hi: u32,            // 节点位图块 MSB
-    pub inode_table_first_block_hi: u32, // 节点表块 MSB
-    pub free_blocks_count_hi: u16,       // 空闲块数 MSB
-    pub free_inodes_count_hi: u16,       // 空闲节点数 MSB
-    pub used_dirs_count_hi: u16,         // 目录数 MSB
-    pub itable_unused_hi: u16,           // 未使用的节点数 MSB
-    pub exclude_bitmap_hi: u32,          // 快照排除位图 MSB
+    pub block_bitmap_hi: u32,            // Block bitmap block MSB
+    pub inode_bitmap_hi: u32,            // Inode bitmap block MSB
+    pub inode_table_first_block_hi: u32, // Inode table block MSB
+    pub free_blocks_count_hi: u16,       // Free blocks count MSB
+    pub free_inodes_count_hi: u16,       // Free inodes count MSB
+    pub used_dirs_count_hi: u16,         // Directories count MSB
+    pub itable_unused_hi: u16,           // Unused inodes count MSB
+    pub exclude_bitmap_hi: u32,          // Snapshot exclusion bitmap MSB
     pub block_bitmap_csum_hi: u16,       // crc32c(s_uuid+grp_num+bbitmap) BE
     pub inode_bitmap_csum_hi: u16,       // crc32c(s_uuid+grp_num+ibitmap) BE
-    pub reserved: u32,                   // 填充
+    pub reserved: u32,                   // Padding
 }
 
 impl Ext4BlockGroup {
@@ -139,7 +139,7 @@ impl Ext4BlockGroup {
 
         orig_checksum = self.checksum;
 
-        // 准备：暂时将bg校验和设为0
+        // Preparation: temporarily set bg checksum to 0
         self.checksum = 0;
 
         // uuid checksum

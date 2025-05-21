@@ -14,8 +14,8 @@ impl Ext4 {
     /// Returns:
     /// `Result<SearchPath>` - search path
     ///
-    /// 如果 depth > 0，则查找extent_index，查找目标 lblock 对应的 extent。
-    /// 如果 depth = 0，则直接在root节点中查找 extent，查找目标 lblock 对应的 extent。
+    /// If depth > 0, search for the extent_index that corresponds to the target lblock.
+    /// If depth = 0, directly search for the extent in the root node that corresponds to the target lblock.
     pub fn find_extent(&self, inode_ref: &Ext4InodeRef, lblock: Ext4Lblk) -> Result<SearchPath> {
         let mut search_path = SearchPath::new();
 
@@ -365,7 +365,7 @@ impl Ext4 {
 
                 self.write_back_inode(inode_ref);
                 
-                // 添加在根节点插入成功后的debug日志
+                // Add debug logs after successful insertion at root node
                 log::debug!("[insert_new_extent] Successfully inserted at root:");
                 log::debug!("  - Root header: magic={:x}, entries={}, max={}, depth={}", 
                     inode_ref.inode.root_extent_header().magic,
@@ -419,7 +419,7 @@ impl Ext4 {
             log::info!("[insert_new_extent] Updated non-root node: entries={}, max={}", 
                 header.entries_count, header.max_entries_count);
 
-            // 先完成块的处理并同步到磁盘
+            // Complete block processing and sync to disk first
             let node_header_entries = header.entries_count;
             let node_header_max = header.max_entries_count;
             ext4block.sync_blk_to_disk(self.block_device.clone());
@@ -484,45 +484,45 @@ impl Ext4 {
             inode_ref.inode.root_extent_header().max_entries_count,
             inode_ref.inode.root_extent_header().depth);
 
-        // 分配新块用于存储原始根节点内容
+        // Allocate new block to store original root node content
         let new_block = self.balloc_alloc_block(inode_ref, None)?;
         log::info!("[ext_grow_indepth] Allocated new block: {}", new_block);
 
-        // 加载新块
+        // Load new block
         let mut new_ext4block =
             Block::load(self.block_device.clone(), new_block as usize * BLOCK_SIZE);
         log::info!("[ext_grow_indepth] Loaded new block");
 
-        // 清空新块，确保没有垃圾数据
+        // Clear new block to ensure no garbage data
         new_ext4block.data.fill(0);
 
-        // 保存原始根节点信息
+        // Save original root node information
         let old_root_header = inode_ref.inode.root_extent_header();
         let old_depth = old_root_header.depth;
         let old_entries_count = old_root_header.entries_count;
         
-        // 获取第一个extent的逻辑块号(仅当原来是叶节点时)
+        // Get logical block number of first extent (only when original was a leaf node)
         let first_logical_block = if old_depth == 0 && old_entries_count > 0 {
             inode_ref.inode.root_extent_at(0).first_block
         } else {
             0
         };
 
-        // 复制根节点extents数据到新块
-        // inode block中的extent开始位置为12字节(header之后)
-        // 新块中的extent开始位置也是12字节(header之后)
+        // Copy root node extents data to new block
+        // extent start position in inode block is 12 bytes (after header)
+        // extent start position in new block is also 12 bytes (after header)
         let header_size = EXT4_EXTENT_HEADER_SIZE;
         
-        // 先复制header
+        // Copy header first
         let mut new_header = Ext4ExtentHeader::new(
             EXT4_EXTENT_MAGIC,
             old_entries_count,
-            ((BLOCK_SIZE - header_size) / EXT4_EXTENT_SIZE) as u16, // 新块可容纳的最大条目数
-            0, // 新块变成叶节点，深度为0
-            0  // generation字段，通常为0
+            ((BLOCK_SIZE - header_size) / EXT4_EXTENT_SIZE) as u16, // Maximum entries the new block can hold
+            0, // New block becomes a leaf node, depth 0
+            0  // generation field, usually 0
         );
         
-        // 将header写入新块
+        // Write header to new block
         let header_bytes = unsafe {
             core::slice::from_raw_parts(
                 &new_header as *const _ as *const u8,
@@ -531,14 +531,14 @@ impl Ext4 {
         };
         new_ext4block.data[..header_size].copy_from_slice(header_bytes);
         
-        // 复制extents数据
+        // Copy extents data
         if old_entries_count > 0 {
-            // 从root block复制extents到新块
-            // inode block中的extent开始位置为12字节(header之后)
-            // 新块中的extent开始位置也是12字节(header之后)
+            // Copy extents from root block to new block
+            // extent start position in inode block is 12 bytes (after header)
+            // extent start position in new block is also 12 bytes (after header)
             let root_extents_size = old_entries_count as usize * EXT4_EXTENT_SIZE;
             
-            // 使用临时变量存储block数据，避免可变借用冲突
+            // Use temporary variable to store block data to avoid mutable borrow conflicts
             let block_data = unsafe {
                 let block_ptr = inode_ref.inode.block.as_ptr();
                 core::slice::from_raw_parts(block_ptr as *const u8, 60)
@@ -552,44 +552,44 @@ impl Ext4 {
         log::info!("[ext_grow_indepth] Copied root data to new block and set header: magic={:x}, entries={}, max_entries={}, depth={}",
             new_header.magic, new_header.entries_count, new_header.max_entries_count, new_header.depth);
         
-        // 同步新块到磁盘
+        // Sync new block to disk
         new_ext4block.sync_blk_to_disk(self.block_device.clone());
         log::info!("[ext_grow_indepth] Synced new block with extents to disk");
         
-        // 先读取第一个extent的块号（如果有），然后更新root节点
+        // First read the block number of the first extent (if any), then update root node
         let first_logical_block_saved = first_logical_block;
         
-        // 更新根节点为索引节点
+        // Update root node to be an index node
         {
             let mut root_header = inode_ref.inode.root_extent_header_mut();
-            root_header.set_magic(); // 设置magic
-            root_header.set_entries_count(1); // 索引节点初始只有一个条目
-            root_header.set_max_entries_count(4); // 根索引节点通常有4个条目
-            root_header.add_depth(); // 增加深度
+            root_header.set_magic(); // Set magic
+            root_header.set_entries_count(1); // Index node initially has one entry
+            root_header.set_max_entries_count(4); // Root index node typically has 4 entries
+            root_header.add_depth(); // Increase depth
             
             log::info!("[ext_grow_indepth] Updated root header: depth {} -> {}, entries={}, max={}", 
                 old_depth, root_header.depth, root_header.entries_count, root_header.max_entries_count);
         }
         
-        // 清除原root节点中的extents数据
+        // Clear extents data in original root node
         unsafe {
             let root_block_ptr = inode_ref.inode.block.as_mut_ptr() as *mut u8;
-            // 跳过header部分，只清除后面的extent数据
+            // Skip header part, only clear the extent data after it
             let extents_ptr = root_block_ptr.add(header_size);
             core::ptr::write_bytes(extents_ptr, 0, 60 - header_size);
         }
         
-        // 创建根节点的第一个索引条目指向新块
+        // Create first index entry in root node pointing to new block
         {
             let mut root_first_index = inode_ref.inode.root_first_index_mut();
-            root_first_index.first_block = first_logical_block_saved; // 设置起始逻辑块号
-            root_first_index.store_pblock(new_block); // 存储新块的物理地址
+            root_first_index.first_block = first_logical_block_saved; // Set starting logical block number
+            root_first_index.store_pblock(new_block); // Store physical address of new block
             
             log::info!("[ext_grow_indepth] Root became index block, first_block={}, pointing to block {}", 
                 first_logical_block_saved, new_block);
         }
 
-        // 将更新后的inode写回磁盘
+        // Write updated inode back to disk
         self.write_back_inode(inode_ref);
         log::info!("[ext_grow_indepth] Wrote updated inode back to disk");
 
@@ -755,11 +755,11 @@ impl Ext4 {
 
             // we are at index
             // example i=1, depth=2
-            // depth 0 (root node) - 处理的索引节点
+            // depth 0 (root node) - Index node being processed
             // +--------+--------+--------+
             // |  idx1  |  idx2  |  idx3  |
             // +--------+--------+--------+
-            //            |path     | 下一个要处理的节点(more_to_rm?)
+            //            |path     | Next node to process (more_to_rm?)
             //            v         v
             //           idx2
             //
@@ -997,22 +997,14 @@ impl Ext4 {
         // |  idx1  |[empty] |  idx3  |
         // +--------+--------+--------+
         //           ^
-        // Current index to remove
 
-        // After moving remaining indexes:
-        // +--------+--------+--------+
-        // |  idx1  |  idx3  |[empty] |
-        // +--------+--------+--------+
-        //           ^
-        // Current index to remove
-
-        let mut i = depth as usize;
+        let i = depth as usize;
         let mut header = path.path[i].header;
 
-        // 获取要删除的索引块
+        // Get the index block to delete
         let leaf_block = path.path[i].index.unwrap().get_pblock();
 
-        // 如果当前索引不是最后一个索引，将后续的索引前移
+        // If current index is not the last one, move subsequent indexes forward
         if path.path[i].position != header.entries_count as usize - 1 {
             let start_pos = size_of::<Ext4ExtentHeader>()
                 + path.path[i].position * size_of::<Ext4ExtentIndex>();
@@ -1028,39 +1020,33 @@ impl Ext4 {
                 .copy_from_slice(&remaining_indexes);
             let remaining_size = remaining_indexes.len();
 
-            // 清空剩余位置
+            // Clear the remaining positions
             let empty_start = start_pos + remaining_size;
             let empty_end = end_pos;
             ext4block.data[empty_start..empty_end].fill(0);
         }
 
-        // 更新头部的entries_count
+        // Update the entries_count in the header
         header.entries_count -= 1;
 
-        // 释放索引块
+        // Free the index block
         self.ext_remove_index_block(inode_ref, &mut path.path[i].index.unwrap());
 
-        // Updating parent index if necessary:
-        // +--------+--------+--------+
-        // |  idx1  |  idx3  |[empty] |
-        // +--------+--------+--------+
-        //           ^
-        // Updated parent index if necessary
-
-        // 如果当前层不是根，需要检查是否需要更新父节点索引
-        while i > 0 {
-            if path.path[i].position != 0 {
+        // If we're not at the root, check if we need to update the parent node index
+        let mut idx = i;
+        while idx > 0 {
+            if path.path[idx].position != 0 {
                 break;
             }
 
-            let parent_idx = i - 1;
+            let parent_idx = idx - 1;
             let parent_index = &mut path.path[parent_idx].index.unwrap();
-            let current_index = &path.path[i].index.unwrap();
+            let current_index = &path.path[idx].index.unwrap();
 
             parent_index.first_block = current_index.first_block;
             self.write_back_inode(inode_ref);
 
-            i -= 1;
+            idx -= 1;
         }
 
         Ok(EOK)
@@ -1068,9 +1054,9 @@ impl Ext4 {
 
     /// Correct the first block of the parent index.
     fn ext_correct_indexes(&self, path: &mut SearchPath) -> Result<usize> {
-        // if child get removed from parent, we need to update the parent's first_block
+        // If child gets removed from parent, we need to update the parent's first_block
         let mut depth = path.depth as usize;
-
+        
         // depth 2:
         // +--------+--------+--------+
         // |[empty] |  ext2  |  ext3  |
@@ -1085,29 +1071,29 @@ impl Ext4 {
         // ^
         // pos=0, now first_block=ext2_first_block
 
-        // 更新父节点索引：
+        // Update parent node index:
         // depth 1:
         // +-----------------------+
         // | idx1_2 |...| idx1_n   |
         // +-----------------------+
         //     ^
-        //     更新父节点索引(first_block)
+        //     Update parent node index (first_block)
 
         // depth 0:
         // +--------+--------+--------+
         // |  idx1  |  idx2  |  idx3  |
         // +--------+--------+--------+
         //     |
-        //     更新根节点索引(first_block)
+        //     Update root node index (first_block)
 
         while depth > 0 {
             let parent_idx = depth - 1;
-
-            // 获取当前层的 extent
+            
+            // Get the extent at the current level
             if let Some(child_extent) = path.path[depth].extent {
-                // 获取父节点
+                // Get the parent node
                 let parent_node = &mut path.path[parent_idx];
-                // 获取父节点的索引，并更新 first_block
+                // Get parent node's index and update first_block
                 if let Some(ref mut parent_index) = parent_node.index {
                     parent_index.first_block = child_extent.first_block;
                 }

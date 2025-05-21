@@ -240,7 +240,7 @@ impl Ext4 {
         let inode_size = inode_ref.inode.size();
         let iblock = ((inode_size as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as u32;
 
-        // 使用新的优化块分配函数
+        // Use new optimized block allocation function
         let allocated_blocks = self.balloc_alloc_block_batch(inode_ref, start_bgid, block_count)?;
         
         if allocated_blocks.is_empty() {
@@ -248,13 +248,13 @@ impl Ext4 {
             return Ok(Vec::new());
         }
 
-        // 记录实际分配的块数量
+        // Record the actual number of allocated blocks
         let actual_allocated = allocated_blocks.len();
         if actual_allocated < block_count {
             log::warn!("[Batch Append] Partial allocation: {}/{} blocks", actual_allocated, block_count);
         }
 
-        // 检查当前extent tree的状态
+        // Check the current state of the extent tree
         let root_header = inode_ref.inode.root_extent_header();
         log::info!("[Batch Append] Current extent tree state: magic={:x}, entries={}, max={}, depth={}", 
             root_header.magic,
@@ -262,10 +262,10 @@ impl Ext4 {
             root_header.max_entries_count,
             root_header.depth);
 
-        // 找出起始的logical block位置
+        // Find the starting logical block position
         let mut current_iblk = iblock;
         let mut last_extent_end = if root_header.entries_count > 0 {
-            // 获取最后一个extent的结束位置
+            // Get the end position of the last extent
             let last_extent = match self.get_last_extent(inode_ref) {
                 Ok(extent) => extent.first_block + extent.block_count as u32,
                 Err(_) => {
@@ -278,30 +278,30 @@ impl Ext4 {
             0
         };
 
-        // 确保新的extent从最后一个extent结束的位置开始
+        // Ensure new extents start after the end of the last extent
         if current_iblk < last_extent_end {
             current_iblk = last_extent_end;
         }
 
-        // 将分配的物理块分组为连续的段
+        // Group allocated physical blocks into contiguous segments
         let mut contiguous_segments = Vec::new();
         let mut current_segment = Vec::new();
         
-        // 添加第一个块到当前段
+        // Add the first block to the current segment
         if !allocated_blocks.is_empty() {
             current_segment.push(allocated_blocks[0]);
         }
         
-        // 从第二个块开始检查连续性
+        // Check for continuity starting from the second block
         for i in 1..allocated_blocks.len() {
             let prev_block = allocated_blocks[i-1];
             let curr_block = allocated_blocks[i];
             
-            // 如果当前块与前一个块连续
+            // If the current block is contiguous with the previous block
             if curr_block == prev_block + 1 {
                 current_segment.push(curr_block);
             } else {
-                // 如果不连续，结束当前段并开始新段
+                // If not contiguous, end the current segment and start a new one
                 if !current_segment.is_empty() {
                     contiguous_segments.push(current_segment);
                     current_segment = Vec::new();
@@ -310,7 +310,7 @@ impl Ext4 {
             }
         }
         
-        // 添加最后一个段
+        // Add the last segment
         if !current_segment.is_empty() {
             contiguous_segments.push(current_segment);
         }
@@ -318,23 +318,23 @@ impl Ext4 {
         log::info!("[Batch Append] Split {} allocated blocks into {} contiguous segments", 
             allocated_blocks.len(), contiguous_segments.len());
 
-        // 定义最大extent长度
+        // Define maximum extent length
         const MAX_EXTENT_LENGTH: usize = EXT_INIT_MAX_LEN as usize;
 
-        // 为每个连续段创建extent
+        // Create extents for each contiguous segment
         for segment in contiguous_segments {
             if segment.is_empty() {
                 continue;
             }
             
-            // 如果segment长度超过最大extent长度，需要拆分
+            // If segment length exceeds maximum extent length, split
             let mut segment_start = 0;
             while segment_start < segment.len() {
-                // 计算当前子段的长度，确保不超过MAX_EXTENT_LENGTH
+                // Calculate current segment length, ensuring it doesn't exceed MAX_EXTENT_LENGTH
                 let sub_segment_length = core::cmp::min(MAX_EXTENT_LENGTH, segment.len() - segment_start);
                 let first_physical_block = segment[segment_start];
                 
-                // 创建新的extent
+                // Create new extent
                 let mut newex = Ext4Extent::default();
                 newex.first_block = current_iblk;
                 newex.store_pblock(first_physical_block);
@@ -343,30 +343,30 @@ impl Ext4 {
                 log::info!("[Batch Append] Inserting extent: first_block={}, block_count={}, physical_block={}", 
                     current_iblk, sub_segment_length, first_physical_block);
                 
-                // 验证extent的有效性
+                // Validate extent validity
                 if !self.is_valid_extent(&newex, inode_ref) {
                     log::error!("[Batch Append] Invalid extent detected: first_block={}, block_count={}", 
                         newex.first_block, newex.block_count);
                     return return_errno_with_message!(Errno::EINVAL, "Invalid extent detected");
                 }
                 
-                // 插入extent
+                // Insert extent
                 self.insert_extent(inode_ref, &mut newex)?;
                 
-                // 更新下一个logical block的位置
+                // Update next logical block position
                 current_iblk = match current_iblk.checked_add(sub_segment_length as u32) {
                     Some(v) => v,
                     None => return return_errno_with_message!(Errno::EINVAL, "Logical block number overflow"),
                 };
                 
-                // 移动到下一个子段
+                // Move to next segment
                 segment_start += sub_segment_length;
             }
             
-            // 更新最后一个extent的结束位置
+            // Update end position of last extent
             last_extent_end = current_iblk;
             
-            // 验证extent tree的状态
+            // Validate extent tree state
             let root_header = inode_ref.inode.root_extent_header();
             log::info!("[Batch Append] Updated extent tree state: magic={:x}, entries={}, max={}, depth={}", 
                 root_header.magic,
@@ -375,7 +375,7 @@ impl Ext4 {
                 root_header.depth);
         }
 
-        // 更新inode大小，确保不会溢出
+        // Update inode size, ensuring it doesn't overflow
         let new_size = match inode_size.checked_add((allocated_blocks.len() * BLOCK_SIZE) as u64) {
             Some(v) => v,
             None => return return_errno_with_message!(Errno::EINVAL, "File size overflow"),

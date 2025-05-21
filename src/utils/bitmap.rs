@@ -1,36 +1,36 @@
-/// 检查位图中的某一位是否被设置
-/// 参数 bmap: 位图数组
-/// 参数 bit: 位图中的位索引
+/// Check if a bit is set in the bitmap
+/// Parameter bmap: Bitmap array
+/// Parameter bit: Bit index in the bitmap
 pub fn ext4_bmap_is_bit_set(bmap: &[u8], bit: u32) -> bool {
     bmap[(bit >> 3) as usize] & (1 << (bit & 7)) != 0
 }
 
-/// 检查位图中的某一位是否被清除
-/// 参数 bmap: 位图数组
-/// 参数 bit: 位图中的位索引
+/// Check if a bit is cleared in the bitmap
+/// Parameter bmap: Bitmap array
+/// Parameter bit: Bit index in the bitmap
 pub fn ext4_bmap_is_bit_clr(bmap: &[u8], bit: u32) -> bool {
     !ext4_bmap_is_bit_set(bmap, bit)
 }
 
-/// 设置位图中的某一位
-/// 参数 bmap: 位图数组
-/// 参数 bit: 位图中的位索引
+/// Set a bit in the bitmap
+/// Parameter bmap: Bitmap array
+/// Parameter bit: Bit index in the bitmap
 pub fn ext4_bmap_bit_set(bmap: &mut [u8], bit: u32) {
     bmap[(bit >> 3) as usize] |= 1 << (bit & 7);
 }
 
-/// 清除位图中的某一位
-/// 参数 bmap: 位图数组
-/// 参数 bit: 位图中的位索引
+/// Clear a bit in the bitmap
+/// Parameter bmap: Bitmap array
+/// Parameter bit: Bit index in the bitmap
 pub fn ext4_bmap_bit_clr(bmap: &mut [u8], bit: u32) {
     bmap[(bit >> 3) as usize] &= !(1 << (bit & 7));
 }
 
-/// 查询位图中的空闲位
-/// 参数 bmap: 位图数组
-/// 参数 sbit: 起始位索引
-/// 参数 ebit: 结束位索引
-/// 参数 bit_id: 用于存储空闲位的索引
+/// Find a free bit in the bitmap
+/// Parameter bmap: Bitmap array
+/// Parameter sbit: Start bit index
+/// Parameter ebit: End bit index
+/// Parameter bit_id: Reference to store the free bit index
 pub fn ext4_bmap_bit_find_clr(bmap: &[u8], sbit: u32, ebit: u32, bit_id: &mut u32) -> bool {
     let mut i: u32;
     let mut bcnt = ebit - sbit;
@@ -78,10 +78,10 @@ pub fn ext4_bmap_bit_find_clr(bmap: &[u8], sbit: u32, ebit: u32, bit_id: &mut u3
     false
 }
 
-/// 清除位图中的一段位
-/// 参数 bmap: Mutable reference to the bitmap array.
-/// 参数 start_bit: The start index of the bit range to clear.
-/// 参数 end_bit: The end index of the bit range to clear.
+/// Clear a range of bits in the bitmap
+/// Parameter bmap: Mutable reference to the bitmap array
+/// Parameter start_bit: The start index of the bit range to clear
+/// Parameter end_bit: The end index of the bit range to clear
 pub fn ext4_bmap_bits_free(bmap: &mut [u8], start_bit: u32, end_bit: u32) {
     for bit in start_bit..=end_bit {
         ext4_bmap_bit_clr(bmap, bit);
