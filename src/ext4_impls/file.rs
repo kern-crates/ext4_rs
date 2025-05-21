@@ -36,10 +36,12 @@ impl Ext4 {
             };
 
             // at this point child need a new block
+            // Create "." entry pointing to the child directory itself
             self.dir_add_entry(child, &new_child_ref, ".")?;
 
             // at this point should insert to existing block
-            self.dir_add_entry(child, &new_child_ref, "..")?;
+            // Create ".." entry pointing to the parent directory
+            self.dir_add_entry(child, parent, "..")?;
 
             child.inode.set_links_count(2);
             let link_cnt = parent.inode.links_count() + 1;
