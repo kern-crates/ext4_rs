@@ -469,6 +469,12 @@ impl Ext4Inode {
         };
         block_device.write_offset(inode_pos, data);
     }
+
+    pub fn root_extent_block(&self) -> u64 {
+        let block_lo = self.block[0] as u64;
+        let block_hi = self.block[1] as u64;
+        block_lo | (block_hi << 32)
+    }
 }
 
 impl Ext4InodeRef {
