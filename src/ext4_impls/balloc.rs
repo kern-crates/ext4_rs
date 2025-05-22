@@ -488,53 +488,23 @@ impl Ext4 {
         }
     }
 
-    /// Check if a block is a system reserved block
-    pub fn is_system_reserved_block(&self, block_num: u64, bgid: u32) -> bool {
-        let sb = &self.super_block;
-        let group_count = sb.block_group_count();
-        let blocks_per_group = sb.blocks_per_group();
-        let inodes_per_group = sb.inodes_per_group();
-        let inode_size = sb.inode_size() as u64;
-        let block_size = sb.block_size() as u64;
-        let desc_size = sb.desc_size() as u32;
-        let block_device = self.block_device.clone();
-        let super_block = &self.super_block;
 
-        // 遍历所有group
-        for bgid in 0..group_count {
-            // 0. meta blocks
-            let meta_blks = self.num_base_meta_blocks(bgid);
-            if meta_blks != 0 {
-                let start = self.get_block_of_bgid(bgid);
-                let end = start + meta_blks as u64 - 1;
-                if block_num >= start && block_num <= end {
+    pub fn is_system_reserved_block(&self, block_num: u64, _bgid: u32) -> bool {
+
+        // 如果缓存未初始化，则不判断
+        if self.system_zone_cache.is_none() {
+            return false;
+        }
+        // 查缓存
+        if let Some(zones) = &self.system_zone_cache {
+            for zone in zones {
+                if block_num >= zone.start_blk && block_num <= zone.end_blk {
                     return true;
                 }
-            }
-            // 加载block group描述符
-            let block_group = Ext4BlockGroup::load_new(block_device.clone(), super_block, bgid as usize);
-            // 1. block bitmap
-            let blk_bmp = block_group.get_block_bitmap_block(super_block);
-            if block_num == blk_bmp {
-                return true;
-            }
-            // 2. inode bitmap
-            let ino_bmp = block_group.get_inode_bitmap_block(super_block);
-            if block_num == ino_bmp {
-                return true;
-            }
-            // 3. inode table
-            let ino_tbl = block_group.get_inode_table_blk_num() as u64;
-            let itb_per_group = ((inodes_per_group as u64 * inode_size + block_size - 1) / block_size) as u64;
-            let ino_tbl_end = ino_tbl + itb_per_group - 1;
-            if block_num >= ino_tbl && block_num <= ino_tbl_end {
-                return true;
             }
         }
         false
     }
-
-
     /// Optimized block allocation inspired by lwext4
     /// 
     /// Params:
