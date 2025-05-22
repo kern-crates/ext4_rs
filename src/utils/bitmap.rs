@@ -43,7 +43,7 @@ pub fn ext4_bmap_bit_find_clr(bmap: &[u8], sbit: u32, ebit: u32, bit_id: &mut u3
         }
 
         if ext4_bmap_is_bit_clr(bmap, i) {
-            *bit_id = sbit;
+            *bit_id = i;
             return true;
         }
 
@@ -51,28 +51,42 @@ pub fn ext4_bmap_bit_find_clr(bmap: &[u8], sbit: u32, ebit: u32, bit_id: &mut u3
         bcnt -= 1;
     }
 
-    let mut sbit = i;
-    let mut bmap = &bmap[(sbit >> 3) as usize..];
+    let mut byte_idx = (i >> 3) as usize;
+    let mut bit_pos = i;
+    
     while bcnt >= 8 {
-        if bmap[0] != 0xFF {
-            for i in 0..8 {
-                if ext4_bmap_is_bit_clr(bmap, i) {
-                    *bit_id = sbit + i;
+        // 检查边界条件
+        if byte_idx >= bmap.len() {
+            return false;
+        }
+        
+        if bmap[byte_idx] != 0xFF {
+            for j in 0..8 {
+                let bit_idx = bit_pos + j;
+                if ext4_bmap_is_bit_clr(bmap, bit_idx) {
+                    *bit_id = bit_idx;
                     return true;
                 }
             }
         }
 
-        bmap = &bmap[1..];
+        byte_idx += 1;
         bcnt -= 8;
-        sbit += 8;
+        bit_pos += 8;
     }
 
-    for i in 0..bcnt {
-        if ext4_bmap_is_bit_clr(bmap, i) {
-            *bit_id = sbit + i;
+    while bcnt > 0 {
+        if bit_pos >= ebit {
+            return false;
+        }
+        
+        if ext4_bmap_is_bit_clr(bmap, bit_pos) {
+            *bit_id = bit_pos;
             return true;
         }
+        
+        bit_pos += 1;
+        bcnt -= 1;
     }
 
     false

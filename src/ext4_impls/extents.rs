@@ -2,6 +2,8 @@ use crate::prelude::*;
 use crate::return_errno_with_message;
 use crate::ext4_defs::*;
 use alloc::format;
+use core::mem::size_of;
+use crate::utils::crc::*;
 
 
 impl Ext4 {
@@ -423,6 +425,14 @@ impl Ext4 {
             let node_header_entries = header.entries_count;
             let node_header_max = header.max_entries_count;
             ext4block.sync_blk_to_disk(self.block_device.clone());
+            
+            // Set the checksum for the updated extent block
+            if let Err(e) = self.set_extent_block_checksum(inode_ref, node_block) {
+                log::warn!("[insert_new_extent] Failed to set extent block checksum: {:?}", e);
+            } else {
+                log::info!("[insert_new_extent] Set checksum for updated extent block");
+            }
+            
             log::info!("[insert_new_extent] Synced non-root node to disk");
 
             log::debug!("[insert_new_extent] Successfully inserted at non-root node:");
@@ -552,9 +562,14 @@ impl Ext4 {
         log::info!("[ext_grow_indepth] Copied root data to new block and set header: magic={:x}, entries={}, max_entries={}, depth={}",
             new_header.magic, new_header.entries_count, new_header.max_entries_count, new_header.depth);
         
-        // Sync new block to disk
+        // Set checksum for the new extent block
         new_ext4block.sync_blk_to_disk(self.block_device.clone());
-        log::info!("[ext_grow_indepth] Synced new block with extents to disk");
+        // Set the checksum for the new extent block
+        if let Err(e) = self.set_extent_block_checksum(inode_ref, new_block as usize) {
+            log::warn!("[ext_grow_indepth] Failed to set extent block checksum: {:?}", e);
+        } else {
+            log::info!("[ext_grow_indepth] Set checksum for new extent block");
+        }
         
         // First read the block number of the first extent (if any), then update root node
         let first_logical_block_saved = first_logical_block;
@@ -602,6 +617,7 @@ impl Ext4 {
 
         Ok(())
     }
+
 }
 
 impl Ext4 {
@@ -1151,4 +1167,89 @@ impl Ext4 {
 
         true
     }
+}
+
+impl Ext4 {
+    /// Calculate and set the extent block checksum in the extent tail
+    fn set_extent_block_checksum(&self, inode_ref: &Ext4InodeRef, block_addr: usize) -> Result<()> {
+        // Check if metadata checksums are enabled in the filesystem
+        let features_ro_compat = self.super_block.features_read_only;
+        // EXT4_FEATURE_RO_COMPAT_METADATA_CSUM is typically 0x400
+        let has_metadata_checksums = (features_ro_compat & 0x400) != 0;
+        
+        if !has_metadata_checksums {
+            return Ok(());
+        }
+
+        // Load the extent block
+        let mut ext4block = Block::load(self.block_device.clone(), block_addr * BLOCK_SIZE);
+        
+        // Get the extent header
+        let header = ext4block.read_offset_as::<Ext4ExtentHeader>(0);
+        
+        // Check for valid magic
+        if header.magic != EXT4_EXTENT_MAGIC {
+            return_errno_with_message!(Errno::EINVAL, "Invalid extent magic");
+        }
+        
+        // Calculate position of the extent tail
+        let tail_offset = ext4_extent_tail_offset(&header);
+        
+        // Create a copy of the data for checksum calculation to avoid borrow conflicts
+        let data_for_checksum = ext4block.data[..tail_offset].to_vec();
+        
+        // Calculate checksum
+        let checksum = self.calculate_extent_block_checksum(inode_ref, &data_for_checksum, block_addr);
+        
+        // Get a mutable reference to the tail
+        let tail: &mut Ext4ExtentTail = ext4block.read_offset_as_mut(tail_offset);
+        
+        // Set checksum in tail
+        tail.et_checksum = checksum;
+        
+        // Write back the block
+        ext4block.sync_blk_to_disk(self.block_device.clone());
+        
+        Ok(())
+    }
+    
+    /// Calculate the checksum for an extent block
+    fn calculate_extent_block_checksum(&self, inode_ref: &Ext4InodeRef, data: &[u8], block_addr: usize) -> u32 {
+        let mut checksum = 0;
+        
+        // If metadata checksums are not enabled, return 0
+        let features_ro_compat = self.super_block.features_read_only;
+        // EXT4_FEATURE_RO_COMPAT_METADATA_CSUM is typically 0x400
+        let has_metadata_checksums = (features_ro_compat & 0x400) != 0;
+        
+        if !has_metadata_checksums {
+            return 0;
+        }
+        
+        // Get UUID from superblock
+        let uuid = &self.super_block.uuid;
+        
+        // Calculate checksum - first using UUID
+        checksum = ext4_crc32c(EXT4_CRC32_INIT, uuid, uuid.len() as u32);
+        
+        // Add inode number to checksum
+        let ino_index = inode_ref.inode_num;
+        checksum = ext4_crc32c(checksum, &ino_index.to_le_bytes(), 4);
+        
+        // Add inode generation to checksum
+        let ino_gen = inode_ref.inode.generation;
+        checksum = ext4_crc32c(checksum, &ino_gen.to_le_bytes(), 4);
+        
+        // Finally add the extent block data
+        checksum = ext4_crc32c(checksum, data, data.len() as u32);
+        
+        checksum
+    }
+
+}
+
+/// Calculate the offset of the extent tail
+pub fn ext4_extent_tail_offset(header: &Ext4ExtentHeader) -> usize {
+    size_of::<Ext4ExtentHeader>() + 
+    (header.max_entries_count as usize * size_of::<Ext4Extent>())
 }
