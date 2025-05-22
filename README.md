@@ -167,6 +167,6 @@ let r = ext4.dir_remove(ROOT_INODE, &path);
 
 
 # known bugs
-1. ext4_valid_extent check fails in linux due to block allocation using system reserved blocks.
+1. ext4_valid_extent check fails in linux due to block allocation using system reserved blocks. See more information [buginfo](./buginfo.md)
 
 2. extent block checksum not set
