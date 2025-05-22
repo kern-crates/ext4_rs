@@ -228,6 +228,14 @@ impl Ext4Superblock {
         };
         block_device.write_offset(SUPERBLOCK_OFFSET, data);
     }
+
+    pub fn incompat_features(&self) -> u32 {
+        self.features_incompatible
+    }
+    
+    pub fn reserved_gdt_blocks(&self) -> u16 {
+        self.s_reserved_gdt_blocks
+    }
 }
 
 impl Ext4Superblock {

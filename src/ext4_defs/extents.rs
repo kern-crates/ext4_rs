@@ -56,6 +56,15 @@ pub struct Ext4Extent {
     pub start_lo: u32,
 }
 
+/// Extent tail structure
+/// This is at the end of the extent block and contains a checksum
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+pub struct Ext4ExtentTail {
+    /// crc32c(uuid+inum+generation+extent_block)
+    pub et_checksum: u32,
+}
+
 /// Extent tree node. Includes the header, the data.
 #[derive(Clone, Debug)]
 pub struct ExtentNode {
