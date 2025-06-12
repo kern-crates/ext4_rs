@@ -36,7 +36,7 @@ pub struct Ext4BlockGroup {
 impl Ext4BlockGroup {
     /// Load the block group descriptor from the disk.
     pub fn load_new(
-        block_device: Arc<dyn BlockDevice>,
+        block_device: &Arc<dyn BlockDevice>,
         super_block: &Ext4Superblock,
         block_group_idx: usize,
     ) -> Self {
@@ -167,14 +167,12 @@ impl Ext4BlockGroup {
     /// Synchronize the block group data to disk.
     pub fn sync_block_group_to_disk(
         &self,
-        block_device: Arc<dyn BlockDevice>,
+        block_device: &Arc<dyn BlockDevice>,
         bgid: usize,
         super_block: &Ext4Superblock,
     ) {
         let dsc_cnt = BLOCK_SIZE / super_block.desc_size as usize;
-        // let dsc_per_block = dsc_cnt;
         let dsc_id = bgid / dsc_cnt;
-        // let first_meta_bg = super_block.first_meta_bg;
         let first_data_block = super_block.first_data_block;
         let block_id = first_data_block as usize + dsc_id + 1;
         let offset = (bgid % dsc_cnt) * super_block.desc_size as usize;
@@ -194,7 +192,7 @@ impl Ext4BlockGroup {
     /// Synchronize the block group data to disk with checksum.
     pub fn sync_to_disk_with_csum(
         &mut self,
-        block_device: Arc<dyn BlockDevice>,
+        block_device: &Arc<dyn BlockDevice>,
         bgid: usize,
         super_block: &Ext4Superblock,
     ) {

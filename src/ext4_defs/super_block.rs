@@ -209,14 +209,14 @@ impl Ext4Superblock {
         self.free_blocks_count_hi = (free_blocks >> 32) as u32;
     }
 
-    pub fn sync_to_disk(&self, block_device: Arc<dyn BlockDevice>) {
+    pub fn sync_to_disk(&self, block_device: &Arc<dyn BlockDevice>) {
         let data = unsafe {
             core::slice::from_raw_parts(self as *const _ as *const u8, size_of::<Ext4Superblock>())
         };
         block_device.write_offset(SUPERBLOCK_OFFSET, data);
     }
 
-    pub fn sync_to_disk_with_csum(&mut self, block_device: Arc<dyn BlockDevice>) {
+    pub fn sync_to_disk_with_csum(&mut self, block_device: &Arc<dyn BlockDevice>) {
         let data = unsafe {
             core::slice::from_raw_parts(self as *const _ as *const u8, size_of::<Ext4Superblock>())
         };

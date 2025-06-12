@@ -45,7 +45,7 @@ impl Ext4 {
 
                 // load physical block
                 let mut ext4block =
-                    Block::load(self.block_device.clone(), fblock as usize * BLOCK_SIZE);
+                    Block::load(&self.block_device, fblock as usize * BLOCK_SIZE);
 
                 // find entry in block
                 let r = self.dir_find_in_block(&ext4block, name, result);
@@ -133,7 +133,7 @@ impl Ext4 {
 
                 // load physical block
                 let ext4block =
-                    Block::load(self.block_device.clone(), fblock as usize * BLOCK_SIZE);
+                    Block::load(&self.block_device, fblock as usize * BLOCK_SIZE);
                 let mut offset = 0;
 
                 // iterate all entries in a block
@@ -191,14 +191,14 @@ impl Ext4 {
 
             // load physical block
             let mut ext4block =
-                Block::load(self.block_device.clone(), pblock as usize * BLOCK_SIZE);
+                Block::load(&self.block_device, pblock as usize * BLOCK_SIZE);
 
             let result = self.try_insert_to_existing_block(&mut ext4block, name, child.inode_num);
 
             if result.is_ok() {
                 // set checksum
                 self.dir_set_csum(&mut ext4block, parent.inode.generation());
-                ext4block.sync_blk_to_disk(self.block_device.clone());
+                ext4block.sync_blk_to_disk(&self.block_device);
 
                 return Ok(EOK);
             }
@@ -212,7 +212,7 @@ impl Ext4 {
 
         // load new block
         let mut new_ext4block =
-            Block::load(self.block_device.clone(), new_block as usize * BLOCK_SIZE);
+            Block::load(&self.block_device, new_block as usize * BLOCK_SIZE);
 
         // write new entry to the new block
         // must succeed, as we just allocated the block
@@ -221,7 +221,7 @@ impl Ext4 {
 
         // set checksum
         self.dir_set_csum(&mut new_ext4block, parent.inode.generation());
-        new_ext4block.sync_blk_to_disk(self.block_device.clone());
+        new_ext4block.sync_blk_to_disk(&self.block_device);
 
         Ok(EOK)
     }
@@ -287,7 +287,7 @@ impl Ext4 {
                 new_entry.copy_to_slice(&mut block.data, offset + sz);
 
                 // Sync to disk
-                block.sync_blk_to_disk(self.block_device.clone());
+                block.sync_blk_to_disk(&self.block_device);
 
                 return Ok(EOK);
             }
@@ -331,7 +331,7 @@ impl Ext4 {
 
         let r = self.dir_find_entry(parent.inode_num, path, &mut result)?;
 
-        let mut ext4block = Block::load(self.block_device.clone(), result.pblock_id * BLOCK_SIZE);
+        let mut ext4block = Block::load(&self.block_device, result.pblock_id * BLOCK_SIZE);
 
         let de_del_entry_len = result.dentry.entry_len();
 
@@ -345,7 +345,7 @@ impl Ext4 {
         de_del.inode = 0;
 
         self.dir_set_csum(&mut ext4block, parent.inode.generation());
-        ext4block.sync_blk_to_disk(self.block_device.clone());
+        ext4block.sync_blk_to_disk(&self.block_device);
 
         Ok(EOK)
     }
@@ -377,7 +377,7 @@ impl Ext4 {
 
                 // load physical block
                 let ext4block =
-                    Block::load(self.block_device.clone(), fblock as usize * BLOCK_SIZE);
+                    Block::load(&self.block_device, fblock as usize * BLOCK_SIZE);
 
                 // start from the first entry
                 let mut offset = 0;

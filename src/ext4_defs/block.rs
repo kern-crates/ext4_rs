@@ -12,7 +12,7 @@ pub struct Block {
 
 impl Block {
     /// Load the block from the disk.
-    pub fn load(block_device: Arc<dyn BlockDevice>, offset: usize) -> Self {
+    pub fn load(block_device: &Arc<dyn BlockDevice>, offset: usize) -> Self {
         let data = block_device.read_offset(offset);
         Block {
             disk_offset: offset,
@@ -75,9 +75,8 @@ impl Block {
     }
 }
 
-
 impl Block{
-    pub fn sync_blk_to_disk(&self, block_device: Arc<dyn BlockDevice>){
+    pub fn sync_blk_to_disk(&self, block_device: &Arc<dyn BlockDevice>){
         block_device.write_offset(self.disk_offset, &self.data);
     }
 }

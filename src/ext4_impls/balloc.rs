@@ -169,7 +169,7 @@ impl Ext4 {
         while count > 0 {
             // Load block group reference
             let mut block_group =
-                Ext4BlockGroup::load_new(self.block_device.clone(), super_block, bgid as usize);
+                Ext4BlockGroup::load_new(&self.block_device, super_block, bgid as usize);
 
             let free_blocks = block_group.get_free_blocks_count();
             if free_blocks == 0 {
@@ -195,7 +195,7 @@ impl Ext4 {
             // Load block with bitmap
             let bmp_blk_adr = block_group.get_block_bitmap_block(super_block);
             let mut bitmap_block =
-                Block::load(self.block_device.clone(), bmp_blk_adr as usize * BLOCK_SIZE);
+                Block::load(&self.block_device, bmp_blk_adr as usize * BLOCK_SIZE);
 
             // Check if goal is free
             if ext4_bmap_is_bit_clr(&bitmap_block.data, idx_in_bg) {
@@ -289,7 +289,7 @@ impl Ext4 {
         while count > 0 {
             // Load block group reference
             let mut block_group =
-                Ext4BlockGroup::load_new(self.block_device.clone(), super_block, bgid as usize);
+                Ext4BlockGroup::load_new(&self.block_device, super_block, bgid as usize);
 
             let free_blocks = block_group.get_free_blocks_count();
             if free_blocks == 0 {
@@ -324,7 +324,7 @@ impl Ext4 {
             // Load block with bitmap
             let bmp_blk_adr = block_group.get_block_bitmap_block(super_block);
             let mut bitmap_block =
-                Block::load(self.block_device.clone(), bmp_blk_adr as usize * BLOCK_SIZE);
+                Block::load(&self.block_device, bmp_blk_adr as usize * BLOCK_SIZE);
 
             // Check if goal is free
             if ext4_bmap_is_bit_clr(&bitmap_block.data, idx_in_bg) {
@@ -404,7 +404,7 @@ impl Ext4 {
         let mut super_blk_free_blocks = super_block.free_blocks_count();
         super_blk_free_blocks -= 1;
         super_block.set_free_blocks_count(super_blk_free_blocks);
-        super_block.sync_to_disk_with_csum(self.block_device.clone());
+        super_block.sync_to_disk_with_csum(&self.block_device);
 
         // Update inode blocks (different block size!) count
         let mut inode_blocks = inode_ref.inode.blocks_count();
@@ -416,7 +416,7 @@ impl Ext4 {
         let mut fb_cnt = block_group.get_free_blocks_count();
         fb_cnt -= 1;
         block_group.set_free_blocks_count(fb_cnt as u32);
-        block_group.sync_to_disk_with_csum(self.block_device.clone(), bgid, &super_block);
+        block_group.sync_to_disk_with_csum(&self.block_device, bgid, &super_block);
 
         Ok(())
     }
@@ -440,7 +440,7 @@ impl Ext4 {
             let idx_in_bg = start % blocks_per_group as u64;
 
             let mut bg =
-                Ext4BlockGroup::load_new(self.block_device.clone(), &super_block, bgid as usize);
+                Ext4BlockGroup::load_new(&self.block_device, &super_block, bgid as usize);
 
             let block_bitmap_block = bg.get_block_bitmap_block(&super_block);
             let mut raw_data = self
@@ -469,7 +469,7 @@ impl Ext4 {
 
             super_blk_free_blocks += free_cnt as u64;
             super_block.set_free_blocks_count(super_blk_free_blocks);
-            super_block.sync_to_disk_with_csum(self.block_device.clone());
+            super_block.sync_to_disk_with_csum(&self.block_device);
 
             /* Update inode blocks (different block size!) count */
             let mut inode_blocks = inode_ref.inode.blocks_count();
@@ -482,7 +482,7 @@ impl Ext4 {
             let mut fb_cnt = bg.get_free_blocks_count();
             fb_cnt += free_cnt as u64;
             bg.set_free_blocks_count(fb_cnt as u32);
-            bg.sync_to_disk_with_csum(self.block_device.clone(), bgid as usize, &super_block);
+            bg.sync_to_disk_with_csum(&self.block_device, bgid as usize, &super_block);
 
             bg_first += 1;
         }
@@ -550,7 +550,7 @@ impl Ext4 {
         while remaining > 0 && groups_checked < block_group_count {
             // Load block group reference
             let mut block_group = 
-                Ext4BlockGroup::load_new(self.block_device.clone(), super_block, bgid as usize);
+                Ext4BlockGroup::load_new(&self.block_device, super_block, bgid as usize);
             
             // Check if this group has free blocks
             let free_blocks = block_group.get_free_blocks_count();
@@ -668,13 +668,13 @@ impl Ext4 {
                 // Update block group free blocks count
                 let new_free_count = free_blocks - found_blocks as u64;
                 block_group.set_free_blocks_count(new_free_count as u32);
-                block_group.sync_to_disk_with_csum(self.block_device.clone(), bgid as usize, super_block);
+                block_group.sync_to_disk_with_csum(&self.block_device, bgid as usize, super_block);
                 
                 // Update superblock free blocks count
                 let mut sb_copy = *super_block;
                 let sb_free_blocks = sb_copy.free_blocks_count();
                 sb_copy.set_free_blocks_count(sb_free_blocks - found_blocks as u64);
-                sb_copy.sync_to_disk_with_csum(self.block_device.clone());
+                sb_copy.sync_to_disk_with_csum(&self.block_device);
                 
                 // Update inode blocks count
                 let blocks_per_fs_block = BLOCK_SIZE as u64 / EXT4_INODE_BLOCK_SIZE as u64;

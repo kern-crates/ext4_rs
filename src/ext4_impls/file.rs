@@ -391,7 +391,7 @@ impl Ext4 {
             };
             total_blocks += 1;
 
-            let mut block = Block::load(self.block_device.clone(), pblock_idx as usize * BLOCK_SIZE);
+            let mut block = Block::load(&self.block_device, pblock_idx as usize * BLOCK_SIZE);
             
             // Read existing data if needed
             if unaligned > 0 || len < BLOCK_SIZE {
@@ -402,8 +402,8 @@ impl Ext4 {
             block.write_offset(unaligned, &write_buf[..len], len);
 
             // Verify write
-            block.sync_blk_to_disk(self.block_device.clone());
-            let verify_block = Block::load(self.block_device.clone(), pblock_idx as usize * BLOCK_SIZE);
+            block.sync_blk_to_disk(&self.block_device);
+            let verify_block = Block::load(&self.block_device, pblock_idx as usize * BLOCK_SIZE);
             if verify_block.data[unaligned..unaligned + len] != write_buf[..len] {
                 log::error!("[Write] Verification failed for unaligned write at block {}", pblock_idx);
                 return return_errno_with_message!(Errno::EIO, "Write verification failed");
@@ -433,7 +433,7 @@ impl Ext4 {
             total_blocks += 1;
 
             let block_offset = pblock_idx as usize * BLOCK_SIZE;
-            let mut block = Block::load(self.block_device.clone(), block_offset);
+            let mut block = Block::load(&self.block_device, block_offset);
             let write_size = min(BLOCK_SIZE, write_buf_len - written);
             
             // For partial block writes, read existing data first
@@ -445,8 +445,8 @@ impl Ext4 {
             block.write_offset(0, &write_buf[written..written + write_size], write_size);
 
             // Verify write
-            block.sync_blk_to_disk(self.block_device.clone());
-            let verify_block = Block::load(self.block_device.clone(), block_offset);
+            block.sync_blk_to_disk(&self.block_device);
+            let verify_block = Block::load(&self.block_device, block_offset);
             if verify_block.data[..write_size] != write_buf[written..written + write_size] {
                 log::error!("[Write] Verification failed for aligned write at block {}", pblock_idx);
                 return return_errno_with_message!(Errno::EIO, "Write verification failed");

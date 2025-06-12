@@ -22,7 +22,7 @@ impl Ext4 {
         let group = (inode_num - 1) / inodes_per_group;
         let index = (inode_num - 1) % inodes_per_group;
         let block_group =
-            Ext4BlockGroup::load_new(self.block_device.clone(), &super_block, group as usize);
+            Ext4BlockGroup::load_new(&self.block_device, &super_block, group as usize);
         let inode_table_blk_num = block_group.get_inode_table_blk_num();
 
         inode_table_blk_num as usize * BLOCK_SIZE + index as usize * inode_size as usize
@@ -32,7 +32,7 @@ impl Ext4 {
     pub fn get_inode_ref(&self, inode_num: u32) -> Ext4InodeRef {
         let offset = self.inode_disk_pos(inode_num);
 
-        let mut ext4block = Block::load(self.block_device.clone(), offset);
+        let mut ext4block = Block::load(&self.block_device, offset);
 
         let inode: &mut Ext4Inode = ext4block.read_as_mut();
 
@@ -52,7 +52,7 @@ impl Ext4 {
             .set_inode_checksum(&self.super_block, inode_ref.inode_num);
         inode_ref
             .inode
-            .sync_inode_to_disk(self.block_device.clone(), inode_pos);
+            .sync_inode_to_disk(&self.block_device, inode_pos);
     }
 
     /// write back inode with checksum
@@ -61,7 +61,7 @@ impl Ext4 {
 
         inode_ref
             .inode
-            .sync_inode_to_disk(self.block_device.clone(), inode_pos);
+            .sync_inode_to_disk(&self.block_device, inode_pos);
     }
 
     /// Get physical block id of a logical block.
@@ -96,7 +96,7 @@ impl Ext4 {
 
         // load block group
         let mut block_group =
-            Ext4BlockGroup::load_new(self.block_device.clone(), &super_block, bgid as usize);
+            Ext4BlockGroup::load_new(&self.block_device, &super_block, bgid as usize);
 
         let block_bitmap_block = block_group.get_block_bitmap_block(&super_block);
 
@@ -117,7 +117,7 @@ impl Ext4 {
         let mut super_blk_free_blocks = super_block.free_blocks_count();
         super_blk_free_blocks -= 1;
         super_block.set_free_blocks_count(super_blk_free_blocks);
-        super_block.sync_to_disk_with_csum(self.block_device.clone());
+        super_block.sync_to_disk_with_csum(&self.block_device);
 
         /* Update inode blocks (different block size!) count */
         let mut inode_blocks = inode_ref.inode.blocks_count();
@@ -129,7 +129,7 @@ impl Ext4 {
         let mut fb_cnt = block_group.get_free_blocks_count();
         fb_cnt -= 1;
         block_group.set_free_blocks_count(fb_cnt as u32);
-        block_group.sync_to_disk_with_csum(self.block_device.clone(), bgid as usize, &super_block);
+        block_group.sync_to_disk_with_csum(&self.block_device, bgid as usize, &super_block);
 
         Ok(rel_blk_idx as Ext4Fsblk)
     }
@@ -428,10 +428,7 @@ impl Ext4 {
         let mut depth = root_header.depth;
 
         while depth > 0 {
-            let index_block = Block::load(
-                self.block_device.clone(),
-                current_block as usize * BLOCK_SIZE,
-            );
+            let index_block = Block::load(&self.block_device, current_block as usize * BLOCK_SIZE);
             let index_header = Ext4ExtentHeader::load_from_u8(&index_block.data[..]);
             if index_header.entries_count == 0 {
                 return return_errno_with_message!(Errno::ENOENT, "Invalid extent tree");
@@ -448,10 +445,7 @@ impl Ext4 {
         }
 
         // Get the last extent entry
-        let extent_block = Block::load(
-            self.block_device.clone(),
-            current_block as usize * BLOCK_SIZE,
-        );
+        let extent_block = Block::load(&self.block_device, current_block as usize * BLOCK_SIZE);
         let extent_header = Ext4ExtentHeader::load_from_u8(&extent_block.data[..]);
         if extent_header.entries_count == 0 {
             return return_errno_with_message!(Errno::ENOENT, "No extent entries found");

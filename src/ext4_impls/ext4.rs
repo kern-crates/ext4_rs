@@ -24,7 +24,7 @@ impl Ext4 {
                 });
             }
             // block group描述符
-            let block_group = Ext4BlockGroup::load_new(self.block_device.clone(), &self.super_block, bgid as usize);
+            let block_group = Ext4BlockGroup::load_new(&self.block_device, &self.super_block, bgid as usize);
             // block bitmap
             let blk_bmp = block_group.get_block_bitmap_block(&self.super_block);
             zones.push(SystemZone {
@@ -53,7 +53,7 @@ impl Ext4 {
     /// Opens and loads an Ext4 from the `block_device`.
     pub fn open(block_device: Arc<dyn BlockDevice>) -> Self {
         // Load the superblock
-        let block = Block::load(block_device.clone(), SUPERBLOCK_OFFSET);
+        let block = Block::load(&block_device, SUPERBLOCK_OFFSET);
         let super_block: Ext4Superblock = block.read_as();
 
         // drop(block);

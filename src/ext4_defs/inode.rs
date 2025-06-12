@@ -463,7 +463,7 @@ impl Ext4Inode {
         }
     }
 
-    pub fn sync_inode_to_disk(&self, block_device: Arc<dyn BlockDevice>, inode_pos: usize) {
+    pub fn sync_inode_to_disk(&self, block_device: &Arc<dyn BlockDevice>, inode_pos: usize) {
         let data = unsafe {
             core::slice::from_raw_parts(self as *const _ as *const u8, size_of::<Ext4Inode>())
         };

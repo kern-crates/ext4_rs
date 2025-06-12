@@ -311,7 +311,7 @@ impl Ext4 {
             let node = &search_path.path[depth];
             let block = node.pblock_of_node;
             let new_ex_offset = core::mem::size_of::<Ext4ExtentHeader>() + core::mem::size_of::<Ext4Extent>() * (node.position);
-            let mut ext4block = Block::load(self.block_device.clone(), block * BLOCK_SIZE);
+            let mut ext4block = Block::load(&self.block_device, block * BLOCK_SIZE);
             let left_ext:&mut Ext4Extent = ext4block.read_offset_as_mut(new_ex_offset);
 
             let unwritten = left_ext.is_unwritten();
@@ -324,7 +324,7 @@ impl Ext4 {
             log::info!("[merge_extent] Updated on-disk extent: logical block {}, physical block {}, length {}", 
                 left_ext.first_block, left_ext.get_pblock(), left_ext.get_actual_len());
 
-            ext4block.sync_blk_to_disk(self.block_device.clone());
+            ext4block.sync_blk_to_disk(&self.block_device);
             log::info!("[merge_extent] Synced merged extent to disk");
         }
 
@@ -408,7 +408,7 @@ impl Ext4 {
             // load block
             let node_block = node.pblock_of_node;
             let mut ext4block =
-            Block::load(self.block_device.clone(), node_block * BLOCK_SIZE);
+            Block::load(&self.block_device, node_block * BLOCK_SIZE);
             let new_ex_offset = core::mem::size_of::<Ext4ExtentHeader>() + core::mem::size_of::<Ext4Extent>() * (node.position + 1);
 
             // insert new extent
@@ -424,7 +424,7 @@ impl Ext4 {
             // Complete block processing and sync to disk first
             let node_header_entries = header.entries_count;
             let node_header_max = header.max_entries_count;
-            ext4block.sync_blk_to_disk(self.block_device.clone());
+            ext4block.sync_blk_to_disk(&self.block_device);
             
             // Set the checksum for the updated extent block
             if let Err(e) = self.set_extent_block_checksum(inode_ref, node_block) {
@@ -500,7 +500,7 @@ impl Ext4 {
 
         // Load new block
         let mut new_ext4block =
-            Block::load(self.block_device.clone(), new_block as usize * BLOCK_SIZE);
+            Block::load(&self.block_device, new_block as usize * BLOCK_SIZE);
         log::info!("[ext_grow_indepth] Loaded new block");
 
         // Clear new block to ensure no garbage data
@@ -563,7 +563,7 @@ impl Ext4 {
             new_header.magic, new_header.entries_count, new_header.max_entries_count, new_header.depth);
         
         // Set checksum for the new extent block
-        new_ext4block.sync_blk_to_disk(self.block_device.clone());
+        new_ext4block.sync_blk_to_disk(&self.block_device);
         // Set the checksum for the new extent block
         if let Err(e) = self.set_extent_block_checksum(inode_ref, new_block as usize) {
             log::warn!("[ext_grow_indepth] Failed to set extent block checksum: {:?}", e);
@@ -733,7 +733,7 @@ impl Ext4 {
                     continue;
                 }
                 let ext4block =
-                    Block::load(self.block_device.clone(), node_pblock * BLOCK_SIZE);
+                    Block::load(&self.block_device, node_pblock * BLOCK_SIZE);
 
                 let header = search_path.path[i as usize].header;
                 let entries_count = header.entries_count;
@@ -859,7 +859,7 @@ impl Ext4 {
             // we are at root
             Block::load_inode_root_block(&inode_ref.inode.block)
         } else {
-            Block::load(self.block_device.clone(), node_disk_pos)
+            Block::load(&self.block_device, node_disk_pos)
         };
 
         // depth 2 (leaf nodes)
@@ -1028,7 +1028,7 @@ impl Ext4 {
                 + (header.entries_count as usize) * size_of::<Ext4ExtentIndex>();
 
             let node_disk_pos = path.path[i].pblock_of_node * BLOCK_SIZE;
-            let mut ext4block = Block::load(self.block_device.clone(), node_disk_pos);
+            let mut ext4block = Block::load(&self.block_device, node_disk_pos);
 
             let remaining_indexes: Vec<u8> =
                 ext4block.data[start_pos + size_of::<Ext4ExtentIndex>()..end_pos].to_vec();
@@ -1151,7 +1151,7 @@ impl Ext4 {
         if let Some(index) = path.index {
             let last_index_pos = header.entries_count as usize - 1;
             let node_disk_pos = path.pblock_of_node * BLOCK_SIZE;
-            let ext4block = Block::load(self.block_device.clone(), node_disk_pos);
+            let ext4block = Block::load(&self.block_device, node_disk_pos);
             let last_index: Ext4ExtentIndex =
                 ext4block.read_offset_as(size_of::<Ext4ExtentIndex>() * last_index_pos);
 
@@ -1182,7 +1182,7 @@ impl Ext4 {
         }
 
         // Load the extent block
-        let mut ext4block = Block::load(self.block_device.clone(), block_addr * BLOCK_SIZE);
+        let mut ext4block = Block::load(&self.block_device, block_addr * BLOCK_SIZE);
         
         // Get the extent header
         let header = ext4block.read_offset_as::<Ext4ExtentHeader>(0);
@@ -1208,7 +1208,7 @@ impl Ext4 {
         tail.et_checksum = checksum;
         
         // Write back the block
-        ext4block.sync_blk_to_disk(self.block_device.clone());
+        ext4block.sync_blk_to_disk(&self.block_device);
         
         Ok(())
     }
