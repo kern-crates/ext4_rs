@@ -333,16 +333,35 @@ impl Ext4 {
 
         let mut ext4block = Block::load(&self.block_device, result.pblock_id * BLOCK_SIZE);
 
-        let de_del_entry_len = result.dentry.entry_len();
-
-        // prev entry
-        let pde: &mut Ext4DirEntry = ext4block.read_offset_as_mut(result.prev_offset);
-
-        pde.entry_len += de_del_entry_len;
-
+        // Invalidate entry first
         let de_del: &mut Ext4DirEntry = ext4block.read_offset_as_mut(result.offset);
-
         de_del.inode = 0;
+
+        // Store entry position in block
+        let pos = result.offset;
+
+        // If entry is not the first in block, it must be merged with previous entry
+        if pos != 0 {
+            let mut offset = 0;
+
+            // Start from the first entry in block
+            let mut tmp_de: Ext4DirEntry = ext4block.read_offset_as(offset);
+            let mut de_len = tmp_de.entry_len();
+
+            // Find direct predecessor of removed entry
+            while (offset + de_len as usize) < pos {
+                offset += de_len as usize;
+                tmp_de = ext4block.read_offset_as(offset);
+                de_len = tmp_de.entry_len();
+            }
+            
+            assert!(de_len as usize + offset == pos, "Invalid predecessor calculation");
+
+            // Add removed entry length to predecessor's length
+            let del_len = result.dentry.entry_len();
+            let mut tmp_de_mut: &mut Ext4DirEntry = ext4block.read_offset_as_mut(offset);
+            tmp_de_mut.entry_len = de_len + del_len;
+        }
 
         self.dir_set_csum(&mut ext4block, parent.inode.generation());
         ext4block.sync_blk_to_disk(&self.block_device);
