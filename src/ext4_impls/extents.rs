@@ -885,6 +885,10 @@ impl Ext4 {
             let mut len = ex.get_actual_len();
             let mut newblock = ex.get_pblock();
 
+            if start + len as u32 - 1 < from {
+                continue;
+            }
+
             // Initial state:
             // +--------+...+--------+  +--------+...+--------+  ......
             // | ext1   |...| ext2   |  | ext3   |...| extn   |  ......
@@ -961,6 +965,23 @@ impl Ext4 {
         // Update the entries count in the header
         header.entries_count = new_entry_count;
 
+        let block_header: &mut Ext4ExtentHeader = ext4block.read_offset_as_mut(0);
+        block_header.entries_count = new_entry_count;
+
+        if node_disk_pos == 0 {
+            let data = unsafe {
+                let ptr = ext4block.data.as_ptr() as *const u32;
+                core::slice::from_raw_parts(ptr, 15)
+            };
+            inode_ref.inode.block.copy_from_slice(data);
+            self.write_back_inode(inode_ref);
+        } else {
+            ext4block.sync_blk_to_disk(&self.block_device);
+            if let Err(e) = self.set_extent_block_checksum(inode_ref, path.path[depth as usize].pblock_of_node) {
+                log::warn!("Failed to set extent block checksum: {:?}", e);
+            }
+        }
+
         /*
          * If the extent pointer is pointed to the first extent of the node, and
          * there's still extents presenting, we may need to correct the indexes
@@ -1020,15 +1041,20 @@ impl Ext4 {
         // Get the index block to delete
         let leaf_block = path.path[i].index.unwrap().get_pblock();
 
+        let node_pblock = path.path[i].pblock_of_node;
+        let node_disk_pos = node_pblock * BLOCK_SIZE;
+        let mut ext4block = if node_disk_pos == 0 {
+            Block::load_inode_root_block(&inode_ref.inode.block)
+        } else {
+            Block::load(&self.block_device, node_disk_pos)
+        };
+
         // If current index is not the last one, move subsequent indexes forward
         if path.path[i].position != header.entries_count as usize - 1 {
             let start_pos = size_of::<Ext4ExtentHeader>()
                 + path.path[i].position * size_of::<Ext4ExtentIndex>();
             let end_pos = size_of::<Ext4ExtentHeader>()
                 + (header.entries_count as usize) * size_of::<Ext4ExtentIndex>();
-
-            let node_disk_pos = path.path[i].pblock_of_node * BLOCK_SIZE;
-            let mut ext4block = Block::load(&self.block_device, node_disk_pos);
 
             let remaining_indexes: Vec<u8> =
                 ext4block.data[start_pos + size_of::<Ext4ExtentIndex>()..end_pos].to_vec();
@@ -1044,6 +1070,22 @@ impl Ext4 {
 
         // Update the entries_count in the header
         header.entries_count -= 1;
+        let block_header: &mut Ext4ExtentHeader = ext4block.read_offset_as_mut(0);
+        block_header.entries_count = header.entries_count;
+
+        if node_disk_pos == 0 {
+            let data = unsafe {
+                let ptr = ext4block.data.as_ptr() as *const u32;
+                core::slice::from_raw_parts(ptr, 15)
+            };
+            inode_ref.inode.block.copy_from_slice(data);
+            self.write_back_inode(inode_ref);
+        } else {
+            ext4block.sync_blk_to_disk(&self.block_device);
+            if let Err(e) = self.set_extent_block_checksum(inode_ref, node_pblock) {
+                log::warn!("Failed to set extent block checksum: {:?}", e);
+            }
+        }
 
         // Free the index block
         self.ext_remove_index_block(inode_ref, &mut path.path[i].index.unwrap());
