@@ -179,6 +179,9 @@ impl Ext4DirEntry {
 
 }
 
+/// The size of a block without its tail
+const BLOCK_DATA_SIZE: usize = BLOCK_SIZE - core::mem::size_of::<Ext4DirEntryTail>();
+
 impl Ext4DirEntry {
 
     /// Get the checksum of the directory entry.
@@ -193,12 +196,12 @@ impl Ext4DirEntry {
         csum = ext4_crc32c(EXT4_CRC32_INIT, &uuid, uuid.len() as u32);
         csum = ext4_crc32c(csum, &ino_index.to_le_bytes(), 4);
         csum = ext4_crc32c(csum, &ino_gen.to_le_bytes(), 4);
-        let mut data = [0u8; 0xff4];
+        let mut data = [0u8; BLOCK_DATA_SIZE];
         unsafe {
-            core::ptr::copy_nonoverlapping(blk_data.as_ptr(), data.as_mut_ptr(), blk_data.len());
+            core::ptr::copy_nonoverlapping(blk_data.as_ptr(), data.as_mut_ptr(), BLOCK_DATA_SIZE);
         }
 
-        csum = ext4_crc32c(csum, &data[..], 0xff4);
+        csum = ext4_crc32c(csum, &data[..], BLOCK_DATA_SIZE.try_into().unwrap());
         csum
     }
 
