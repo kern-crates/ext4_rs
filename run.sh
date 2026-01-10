@@ -23,7 +23,7 @@ cd ../
 sudo umount tmp
 
 ## run
-cargo run LOG=trace
+cargo run --release LOG=trace
 
 ## write check
 sudo mount ./ex4.img ./tmp/
