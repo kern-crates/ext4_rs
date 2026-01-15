@@ -455,7 +455,7 @@ impl Ext4 {
                 free_cnt = count;
             }
 
-            ext4_bmap_bits_free(data, idx_in_bg as u32, free_cnt as u32);
+            ext4_bmap_bits_free(data, idx_in_bg as u32, idx_in_bg as u32 + free_cnt as u32 - 1);
 
             count -= free_cnt;
             start += free_cnt as u64;
