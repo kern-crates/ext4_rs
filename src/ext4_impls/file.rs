@@ -315,7 +315,7 @@ impl Ext4 {
         let mut new_blocks = 0;
 
         // Start bgid for block allocation
-        let mut start_bgid = 1;
+        let mut start_bgid = 0;
 
         // Pre-allocate blocks if needed
         let blocks_to_allocate = if iblk_idx >= ifile_blocks as usize {
